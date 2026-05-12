@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: benchmarks
+    ports:
+      - "5432:5432"
