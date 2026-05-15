@@ -100,7 +100,7 @@ func printStats(results []Result) {
 
 func main() {
 	targetURL := "http://localhost:8080"
-	numBots := 100
+	numBots := 1000
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
