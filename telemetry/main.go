@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 var ctx = context.Background()
@@ -38,23 +39,40 @@ func percentile(latencies []float64, p float64) float64 {
 	return latencies[index]
 }
 
-func computeScore(rdb *redis.Client, contestantID string) Score {
-	// read all results from Redis
-	raw, err := rdb.LRange(ctx, "bot:results", 0, -1).Result()
+func consumeFromRedpanda(expectedCount int) []Result {
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers("localhost:9092"),
+		kgo.ConsumeTopics("bot-results"),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
 	if err != nil {
-		fmt.Println("Redis read error:", err)
-		return Score{}
+		fmt.Println("Redpanda connection error:", err)
+		return nil
+	}
+	defer client.Close()
+
+	var results []Result
+	for len(results) < expectedCount {
+		fetches := client.PollFetches(ctx)
+		fetches.EachRecord(func(r *kgo.Record) {
+			var result Result
+			json.Unmarshal(r.Value, &result)
+			results = append(results, result)
+		})
 	}
 
+	fmt.Printf("Consumed %d results from Redpanda\n", len(results))
+	return results
+}
+
+func computeScore(results []Result, contestantID string) Score {
 	var latencies []float64
 	success, total := 0, 0
 
-	for _, r := range raw {
-		var result Result
-		json.Unmarshal([]byte(r), &result)
-		latencies = append(latencies, float64(result.Latency)/float64(time.Millisecond))
+	for _, r := range results {
+		latencies = append(latencies, float64(r.Latency)/float64(time.Millisecond))
 		total++
-		if result.Success {
+		if r.Success {
 			success++
 		}
 	}
@@ -65,10 +83,7 @@ func computeScore(rdb *redis.Client, contestantID string) Score {
 	p90 := percentile(latencies, 90)
 	p99 := percentile(latencies, 99)
 	successRate := float64(success) / float64(total) * 100
-	tps := float64(total) / 10.0 // assuming 10 second test window
-
-	// score formula: higher is better
-	// reward low latency and high success rate
+	tps := float64(total) / 10.0
 	score := (1000.0 / (p99 + 1)) * (successRate / 100.0)
 
 	return Score{
@@ -83,22 +98,18 @@ func computeScore(rdb *redis.Client, contestantID string) Score {
 }
 
 func pushLeaderboard(rdb *redis.Client, score Score) {
-	// store full score as JSON
 	data, _ := json.Marshal(score)
 	rdb.HSet(ctx, "leaderboard:scores", score.ContestantID, data)
-
-	// store just the numeric score in a sorted set for ranking
 	rdb.ZAdd(ctx, "leaderboard:ranking", redis.Z{
 		Score:  score.Score,
 		Member: score.ContestantID,
 	})
-
 	fmt.Printf("Score pushed to leaderboard for %s\n", score.ContestantID)
 }
 
 func printScore(score Score) {
 	fmt.Printf("\n--- Telemetry Report ---\n")
-	fmt.Printf("Contestant: %s\n", score.ContestantID)
+	fmt.Printf("Contestant:   %s\n", score.ContestantID)
 	fmt.Printf("P50 Latency:  %.2f ms\n", score.P50)
 	fmt.Printf("P90 Latency:  %.2f ms\n", score.P90)
 	fmt.Printf("P99 Latency:  %.2f ms\n", score.P99)
@@ -113,7 +124,8 @@ func main() {
 	})
 
 	contestantID := "contestant_001"
-	score := computeScore(rdb, contestantID)
+	results := consumeFromRedpanda(1000)
+	score := computeScore(results, contestantID)
 	printScore(score)
 	pushLeaderboard(rdb, score)
 }
