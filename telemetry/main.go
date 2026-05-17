@@ -19,16 +19,18 @@ type Result struct {
 	OrderType string        `json:"order_type"`
 	Latency   time.Duration `json:"latency_ns"`
 	Success   bool          `json:"success"`
+	Correct   bool          `json:"correct"`
 }
 
 type Score struct {
-	ContestantID string  `json:"contestant_id"`
-	P50          float64 `json:"p50_ms"`
-	P90          float64 `json:"p90_ms"`
-	P99          float64 `json:"p99_ms"`
-	SuccessRate  float64 `json:"success_rate"`
-	TPS          float64 `json:"tps"`
-	Score        float64 `json:"score"`
+	ContestantID    string  `json:"contestant_id"`
+	P50             float64 `json:"p50_ms"`
+	P90             float64 `json:"p90_ms"`
+	P99             float64 `json:"p99_ms"`
+	SuccessRate     float64 `json:"success_rate"`
+	CorrectnessRate float64 `json:"correctness_rate"`
+	TPS             float64 `json:"tps"`
+	Score           float64 `json:"score"`
 }
 
 func percentile(latencies []float64, p float64) float64 {
@@ -67,13 +69,16 @@ func consumeFromRedpanda(expectedCount int) []Result {
 
 func computeScore(results []Result, contestantID string) (Score, []float64) {
 	var latencies []float64
-	success, total := 0, 0
+	success, correct, total := 0, 0, 0
 
 	for _, r := range results {
 		latencies = append(latencies, float64(r.Latency)/float64(time.Millisecond))
 		total++
 		if r.Success {
 			success++
+		}
+		if r.Correct {
+			correct++
 		}
 	}
 
@@ -83,17 +88,21 @@ func computeScore(results []Result, contestantID string) (Score, []float64) {
 	p90 := percentile(latencies, 90)
 	p99 := percentile(latencies, 99)
 	successRate := float64(success) / float64(total) * 100
+	correctnessRate := float64(correct) / float64(total) * 100
 	tps := float64(total) / 10.0
-	score := (1000.0 / (p99 + 1)) * (successRate / 100.0)
+
+	// updated score: latency + success rate + correctness all factor in
+	score := (1000.0 / (p99 + 1)) * (successRate / 100.0) * (correctnessRate / 100.0)
 
 	return Score{
-		ContestantID: contestantID,
-		P50:          p50,
-		P90:          p90,
-		P99:          p99,
-		SuccessRate:  successRate,
-		TPS:          tps,
-		Score:        score,
+		ContestantID:    contestantID,
+		P50:             p50,
+		P90:             p90,
+		P99:             p99,
+		SuccessRate:     successRate,
+		CorrectnessRate: correctnessRate,
+		TPS:             tps,
+		Score:           score,
 	}, latencies
 }
 
@@ -154,13 +163,14 @@ func pushLeaderboard(rdb *redis.Client, score Score) {
 
 func printScore(score Score) {
 	fmt.Printf("\n--- Telemetry Report ---\n")
-	fmt.Printf("Contestant:   %s\n", score.ContestantID)
-	fmt.Printf("P50 Latency:  %.2f ms\n", score.P50)
-	fmt.Printf("P90 Latency:  %.2f ms\n", score.P90)
-	fmt.Printf("P99 Latency:  %.2f ms\n", score.P99)
-	fmt.Printf("Success Rate: %.1f%%\n", score.SuccessRate)
-	fmt.Printf("TPS:          %.1f\n", score.TPS)
-	fmt.Printf("Final Score:  %.4f\n", score.Score)
+	fmt.Printf("Contestant:    %s\n", score.ContestantID)
+	fmt.Printf("P50 Latency:   %.2f ms\n", score.P50)
+	fmt.Printf("P90 Latency:   %.2f ms\n", score.P90)
+	fmt.Printf("P99 Latency:   %.2f ms\n", score.P99)
+	fmt.Printf("Success Rate:  %.1f%%\n", score.SuccessRate)
+	fmt.Printf("Correctness:   %.1f%%\n", score.CorrectnessRate)
+	fmt.Printf("TPS:           %.1f\n", score.TPS)
+	fmt.Printf("Final Score:   %.4f\n", score.Score)
 }
 
 func main() {
@@ -169,7 +179,7 @@ func main() {
 	})
 
 	contestantID := "contestant_001"
-	results := consumeFromRedpanda(1000)
+	results := consumeFromRedpanda(100)
 	score, latencies := computeScore(results, contestantID)
 	printScore(score)
 	printHistogram(latencies)
