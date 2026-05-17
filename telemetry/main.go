@@ -65,7 +65,7 @@ func consumeFromRedpanda(expectedCount int) []Result {
 	return results
 }
 
-func computeScore(results []Result, contestantID string) Score {
+func computeScore(results []Result, contestantID string) (Score, []float64) {
 	var latencies []float64
 	success, total := 0, 0
 
@@ -94,6 +94,51 @@ func computeScore(results []Result, contestantID string) Score {
 		SuccessRate:  successRate,
 		TPS:          tps,
 		Score:        score,
+	}, latencies
+}
+
+func repeatChar(c string, n int) string {
+	result := ""
+	for i := 0; i < n; i++ {
+		result += c
+	}
+	return result
+}
+
+func printHistogram(latencies []float64) {
+	buckets := []struct {
+		label string
+		max   float64
+	}{
+		{"0-10ms", 10},
+		{"10-50ms", 50},
+		{"50-100ms", 100},
+		{"100-250ms", 250},
+		{"250-500ms", 500},
+		{"500ms+", math.MaxFloat64},
+	}
+
+	counts := make([]int, len(buckets))
+	for _, l := range latencies {
+		for i, b := range buckets {
+			if l <= b.max {
+				counts[i]++
+				break
+			}
+		}
+	}
+
+	total := len(latencies)
+	fmt.Printf("\n--- Latency Histogram ---\n")
+	for i, b := range buckets {
+		pct := float64(counts[i]) / float64(total) * 100
+		bar := int(pct / 2)
+		fmt.Printf("%-12s │%s %d (%.1f%%)\n",
+			b.label,
+			repeatChar("█", bar),
+			counts[i],
+			pct,
+		)
 	}
 }
 
@@ -125,7 +170,8 @@ func main() {
 
 	contestantID := "contestant_001"
 	results := consumeFromRedpanda(1000)
-	score := computeScore(results, contestantID)
+	score, latencies := computeScore(results, contestantID)
 	printScore(score)
+	printHistogram(latencies)
 	pushLeaderboard(rdb, score)
 }
