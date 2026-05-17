@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -17,17 +19,18 @@ var ctx = context.Background()
 
 type Order struct {
 	BotID    int     `json:"bot_id"`
-	Type     string  `json:"type"`    // "limit", "market", "cancel"
-	Side     string  `json:"side"`    // "buy", "sell"
-	Price    float64 `json:"price"`   // only matters for limit orders
+	Type     string  `json:"type"`
+	Side     string  `json:"side"`
+	Price    float64 `json:"price"`
 	Quantity int     `json:"quantity"`
 }
 
 type Result struct {
-	BotID     int           `json:"bot_id"`
-	OrderType string        `json:"order_type"`
-	Latency   time.Duration `json:"latency_ns"`
-	Success   bool          `json:"success"`
+	BotID        int           `json:"bot_id"`
+	OrderType    string        `json:"order_type"`
+	Latency      time.Duration `json:"latency_ns"`
+	Success      bool          `json:"success"`
+	ContestantID string        `json:"contestant_id"`
 }
 
 func randomOrder(botID int) Order {
@@ -46,25 +49,25 @@ func randomOrder(botID int) Order {
 	}
 }
 
-func runBot(botID int, targetURL string, wg *sync.WaitGroup, results chan<- Result) {
-	defer wg.Done()      // tells main() "I'm done" when this function exits
- 
-	order := randomOrder(botID)         // pick a random order type
-	payload, _ := json.Marshal(order)   // convert to JSON
+func runBot(botID int, targetURL string, contestantID string, wg *sync.WaitGroup, results chan<- Result) {
+	defer wg.Done()
 
-	start := time.Now()                 // start the clock
-	resp, err := http.Post(targetURL+"/order", "application/json", bytes.NewBuffer(payload)) // send the order
-	latency := time.Since(start)        // stop the clock
+	order := randomOrder(botID)
+	payload, _ := json.Marshal(order)
+
+	start := time.Now()
+	resp, err := http.Post(targetURL+"/order", "application/json", bytes.NewBuffer(payload))
+	latency := time.Since(start)
 
 	if err != nil || resp.StatusCode != 200 {
-		results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: false}
+		results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: false, ContestantID: contestantID}
 		return
 	}
 	defer resp.Body.Close()
-	results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: true}
+	results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: true, ContestantID: contestantID}
 }
 
-func pushToRedpanda(results []Result) {
+func pushToRedpanda(results []Result, topic string) {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers("localhost:9092"),
 	)
@@ -78,7 +81,7 @@ func pushToRedpanda(results []Result) {
 	for _, r := range results {
 		data, _ := json.Marshal(r)
 		records = append(records, &kgo.Record{
-			Topic: "bot-results",
+			Topic: topic,
 			Value: data,
 		})
 	}
@@ -88,7 +91,7 @@ func pushToRedpanda(results []Result) {
 		fmt.Println("Redpanda produce error:", err)
 		return
 	}
-	fmt.Printf("Pushed %d results to Redpanda topic: bot-results\n", len(results))
+	fmt.Printf("Pushed %d results to Redpanda topic: %s\n", len(results), topic)
 }
 
 func printStats(results []Result) {
@@ -115,27 +118,45 @@ func printStats(results []Result) {
 }
 
 func main() {
-	targetURL := "http://localhost:8080"
-	numBots := 1000
+	var numBots int
+	var targetURL string
+	var contestantID string
+	var topic string
 
-	resultsChan := make(chan Result, numBots)
-	var wg sync.WaitGroup
+	var rootCmd = &cobra.Command{
+		Use:   "bot-fleet",
+		Short: "Distributed bot fleet for stress testing trading engines",
+		Run: func(cmd *cobra.Command, args []string) {
+			resultsChan := make(chan Result, numBots)
+			var wg sync.WaitGroup
 
-	fmt.Printf("Spawning %d bots against %s\n", numBots, targetURL)
+			fmt.Printf("Spawning %d bots against %s (contestant: %s)\n", numBots, targetURL, contestantID)
 
-	for i := 0; i < numBots; i++ {
-		wg.Add(1)                                   // "expecting one more bot to finish"
-		go runBot(i, targetURL, &wg, resultsChan)   // launch bot as goroutine
+			for i := 0; i < numBots; i++ {
+				wg.Add(1)
+				go runBot(i, targetURL, contestantID, &wg, resultsChan)
+			}
+
+			wg.Wait()
+			close(resultsChan)
+
+			var allResults []Result
+			for r := range resultsChan {
+				allResults = append(allResults, r)
+			}
+
+			printStats(allResults)
+			pushToRedpanda(allResults, topic)
+		},
 	}
 
-	wg.Wait()                  // block here until all 100 call wg.Done()
-	close(resultsChan)
+	rootCmd.Flags().IntVarP(&numBots, "bots", "b", 1000, "Number of concurrent bots")
+	rootCmd.Flags().StringVarP(&targetURL, "target", "t", "http://localhost:8080", "Target URL of contestant engine")
+	rootCmd.Flags().StringVarP(&contestantID, "contestant", "c", "contestant_001", "Contestant ID")
+	rootCmd.Flags().StringVarP(&topic, "topic", "p", "bot-results", "Redpanda topic to publish results")
 
-	var allResults []Result
-	for r := range resultsChan {
-		allResults = append(allResults, r)
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
-
-	printStats(allResults)
-	pushToRedpanda(allResults)
 }
