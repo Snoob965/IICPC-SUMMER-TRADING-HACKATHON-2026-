@@ -31,6 +31,7 @@ type Result struct {
 	Latency      time.Duration `json:"latency_ns"`
 	Success      bool          `json:"success"`
 	ContestantID string        `json:"contestant_id"`
+	Correct      bool          `json:"correct"`
 }
 
 func randomOrder(botID int) Order {
@@ -49,6 +50,33 @@ func randomOrder(botID int) Order {
 	}
 }
 
+func validateCorrectness(targetURL string, order Order) bool {
+	if order.Type != "limit" {
+		return true
+	}
+
+	resp, err := http.Get(targetURL + "/orderbook")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	var book map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&book)
+
+	bestBid, hasBid := book["best_bid"].(float64)
+	bestAsk, hasAsk := book["best_ask"].(float64)
+
+	if order.Side == "buy" && hasBid {
+		return bestBid <= order.Price+10
+	}
+	if order.Side == "sell" && hasAsk {
+		return bestAsk >= order.Price-10
+	}
+
+	return true
+}
+
 func runBot(botID int, targetURL string, contestantID string, wg *sync.WaitGroup, results chan<- Result) {
 	defer wg.Done()
 
@@ -60,11 +88,13 @@ func runBot(botID int, targetURL string, contestantID string, wg *sync.WaitGroup
 	latency := time.Since(start)
 
 	if err != nil || resp.StatusCode != 200 {
-		results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: false, ContestantID: contestantID}
+		results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: false, ContestantID: contestantID, Correct: false}
 		return
 	}
 	defer resp.Body.Close()
-	results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: true, ContestantID: contestantID}
+
+	correct := validateCorrectness(targetURL, order)
+	results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: true, ContestantID: contestantID, Correct: correct}
 }
 
 func pushToRedpanda(results []Result, topic string) {
@@ -96,7 +126,7 @@ func pushToRedpanda(results []Result, topic string) {
 
 func printStats(results []Result) {
 	var totalLatency time.Duration
-	success, failed := 0, 0
+	success, failed, correct := 0, 0, 0
 	orderTypes := map[string]int{}
 
 	for _, r := range results {
@@ -107,14 +137,19 @@ func printStats(results []Result) {
 		} else {
 			failed++
 		}
+		if r.Correct {
+			correct++
+		}
 	}
 
 	avg := totalLatency / time.Duration(len(results))
 	fmt.Printf("\n--- Results ---\n")
-	fmt.Printf("Success: %d  Failed: %d\n", success, failed)
+	fmt.Printf("Success:     %d  Failed: %d\n", success, failed)
 	fmt.Printf("Avg Latency: %v\n", avg)
-	fmt.Printf("Order mix: limit=%d market=%d cancel=%d\n",
+	fmt.Printf("Order mix:   limit=%d market=%d cancel=%d\n",
 		orderTypes["limit"], orderTypes["market"], orderTypes["cancel"])
+	fmt.Printf("Correctness: %d/%d (%.1f%%)\n",
+		correct, len(results), float64(correct)/float64(len(results))*100)
 }
 
 func main() {
