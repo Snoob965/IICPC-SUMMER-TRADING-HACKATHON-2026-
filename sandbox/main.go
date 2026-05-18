@@ -4,12 +4,32 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 )
 
-// This function will eventually run the Docker commands you researched
+// This function triggers the secure Docker container using your research!
 func executeContestantBinary(binaryName string) {
 	fmt.Printf("Preparing to run %s in secure Docker container...\n", binaryName)
-	// TODO: Implement exec.Command("docker", "run", "--rm", "--memory=256m", ...)
+
+	// Here are all the flags from your DOCKER_SANDBOX_RESEARCH.md
+	cmd := exec.Command("docker", "run", "--rm",
+		"--memory=256m",
+		"--cpus=1.0",
+		"--network=none",
+		"--read-only",
+		"--security-opt=no-new-privileges",
+		"ubuntu:22.04", 
+		"echo", "Sandbox secure environment is working!") // We use echo just to test it safely
+
+	// Capture the output from the Docker container
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("Container execution failed: %v\nOutput: %s\n", err, string(output))
+		return
+	}
+
+	// Print the results to the server log
+	fmt.Printf("Container Output:\n%s\n", string(output))
 }
 
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -18,11 +38,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// For now, we are just acknowledging the request
-	fmt.Fprintf(w, "Upload endpoint hit! Ready to receive binaries.\n")
+	fmt.Fprintf(w, "Upload endpoint hit! Kickstarting execution...\n")
 	
-	// Simulate kicking off the execution environment
-	executeContestantBinary("dummy_contestant_bot")
+	// Trigger the Docker function
+	executeContestantBinary("dummy_bot")
 }
 
 func main() {
