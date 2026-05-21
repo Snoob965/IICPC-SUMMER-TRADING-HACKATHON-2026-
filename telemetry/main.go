@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"math"
 	"sort"
@@ -20,17 +21,27 @@ type Result struct {
 	Latency   time.Duration `json:"latency_ns"`
 	Success   bool          `json:"success"`
 	Correct   bool          `json:"correct"`
+	Wave      int           `json:"wave"`
 }
 
-type Score struct {
-	ContestantID    string  `json:"contestant_id"`
-	P50             float64 `json:"p50_ms"`
-	P90             float64 `json:"p90_ms"`
-	P99             float64 `json:"p99_ms"`
-	SuccessRate     float64 `json:"success_rate"`
-	CorrectnessRate float64 `json:"correctness_rate"`
-	TPS             float64 `json:"tps"`
-	Score           float64 `json:"score"`
+type WaveScore struct {
+	WaveNum     int     `json:"wave_num"`
+	Label       string  `json:"label"`
+	P50         float64 `json:"p50_ms"`
+	P90         float64 `json:"p90_ms"`
+	P99         float64 `json:"p99_ms"`
+	SuccessRate float64 `json:"success_rate"`
+	Correctness float64 `json:"correctness"`
+	TPS         float64 `json:"tps"`
+	Score       float64 `json:"score"`
+}
+
+type FinalScore struct {
+	ContestantID string      `json:"contestant_id"`
+	Waves        []WaveScore `json:"waves"`
+	OverallScore float64     `json:"overall_score"`
+	OverallP99   float64     `json:"overall_p99"`
+	OverallSR    float64     `json:"overall_success_rate"`
 }
 
 func percentile(latencies []float64, p float64) float64 {
@@ -67,7 +78,7 @@ func consumeFromRedpanda(expectedCount int) []Result {
 	return results
 }
 
-func computeScore(results []Result, contestantID string) (Score, []float64) {
+func scoreWave(results []Result, waveNum int, label string) WaveScore {
 	var latencies []float64
 	success, correct, total := 0, 0, 0
 
@@ -88,22 +99,21 @@ func computeScore(results []Result, contestantID string) (Score, []float64) {
 	p90 := percentile(latencies, 90)
 	p99 := percentile(latencies, 99)
 	successRate := float64(success) / float64(total) * 100
-	correctnessRate := float64(correct) / float64(total) * 100
-	tps := float64(total) / 10.0
+	correctness := float64(correct) / float64(total) * 100
+	tps := float64(total) / 15.0
+	score := (1000.0 / (p99 + 1)) * (successRate / 100.0) * (correctness / 100.0)
 
-	// updated score: latency + success rate + correctness all factor in
-	score := (1000.0 / (p99 + 1)) * (successRate / 100.0) * (correctnessRate / 100.0)
-
-	return Score{
-		ContestantID:    contestantID,
-		P50:             p50,
-		P90:             p90,
-		P99:             p99,
-		SuccessRate:     successRate,
-		CorrectnessRate: correctnessRate,
-		TPS:             tps,
-		Score:           score,
-	}, latencies
+	return WaveScore{
+		WaveNum:     waveNum,
+		Label:       label,
+		P50:         p50,
+		P90:         p90,
+		P99:         p99,
+		SuccessRate: successRate,
+		Correctness: correctness,
+		TPS:         tps,
+		Score:       score,
+	}
 }
 
 func repeatChar(c string, n int) string {
@@ -138,7 +148,7 @@ func printHistogram(latencies []float64) {
 	}
 
 	total := len(latencies)
-	fmt.Printf("\n--- Latency Histogram ---\n")
+	fmt.Printf("\n--- Latency Histogram (all waves) ---\n")
 	for i, b := range buckets {
 		pct := float64(counts[i]) / float64(total) * 100
 		bar := int(pct / 2)
@@ -151,37 +161,109 @@ func printHistogram(latencies []float64) {
 	}
 }
 
-func pushLeaderboard(rdb *redis.Client, score Score) {
-	data, _ := json.Marshal(score)
-	rdb.HSet(ctx, "leaderboard:scores", score.ContestantID, data)
+func pushLeaderboard(rdb *redis.Client, final FinalScore) {
+	data, _ := json.Marshal(final)
+	rdb.HSet(ctx, "leaderboard:scores", final.ContestantID, data)
 	rdb.ZAdd(ctx, "leaderboard:ranking", redis.Z{
-		Score:  score.Score,
-		Member: score.ContestantID,
+		Score:  final.OverallScore,
+		Member: final.ContestantID,
 	})
-	fmt.Printf("Score pushed to leaderboard for %s\n", score.ContestantID)
+	fmt.Printf("\nScore pushed to leaderboard for %s\n", final.ContestantID)
 }
 
-func printScore(score Score) {
-	fmt.Printf("\n--- Telemetry Report ---\n")
-	fmt.Printf("Contestant:    %s\n", score.ContestantID)
-	fmt.Printf("P50 Latency:   %.2f ms\n", score.P50)
-	fmt.Printf("P90 Latency:   %.2f ms\n", score.P90)
-	fmt.Printf("P99 Latency:   %.2f ms\n", score.P99)
-	fmt.Printf("Success Rate:  %.1f%%\n", score.SuccessRate)
-	fmt.Printf("Correctness:   %.1f%%\n", score.CorrectnessRate)
-	fmt.Printf("TPS:           %.1f\n", score.TPS)
-	fmt.Printf("Final Score:   %.4f\n", score.Score)
+func printFinalScore(final FinalScore) {
+	waveLabels := map[int]string{
+		1: "Limit Orders",
+		2: "Market Orders",
+		3: "Cancel Orders",
+		4: "Mixed Sustained",
+	}
+
+	fmt.Printf("\n╔══════════════════════════════════════════════╗\n")
+	fmt.Printf("║           TELEMETRY SCORING REPORT          ║\n")
+	fmt.Printf("╚══════════════════════════════════════════════╝\n")
+	fmt.Printf("Contestant: %s\n", final.ContestantID)
+
+	for _, w := range final.Waves {
+		label := waveLabels[w.WaveNum]
+		status := "✓"
+		if w.SuccessRate < 95 {
+			status = "⚠"
+		}
+		if w.SuccessRate < 80 {
+			status = "✗"
+		}
+		fmt.Printf("\nWave %d %-20s %s\n", w.WaveNum, label, status)
+		fmt.Printf("  P50: %.2fms  P90: %.2fms  P99: %.2fms\n", w.P50, w.P90, w.P99)
+		fmt.Printf("  Success: %.1f%%  Correct: %.1f%%  TPS: %.1f\n", w.SuccessRate, w.Correctness, w.TPS)
+		fmt.Printf("  Wave Score: %.4f\n", w.Score)
+	}
+
+	fmt.Printf("\n──────────────────────────────────────────────\n")
+	fmt.Printf("Overall P99:     %.2fms\n", final.OverallP99)
+	fmt.Printf("Overall Success: %.1f%%\n", final.OverallSR)
+	fmt.Printf("FINAL SCORE:     %.4f\n", final.OverallScore)
+	fmt.Printf("──────────────────────────────────────────────\n")
 }
 
 func main() {
+	expectedResults := flag.Int("expected", 640, "Expected number of results from Redpanda")
+	contestantID := flag.String("contestant", "contestant_001", "Contestant ID to score")
+	flag.Parse()
+
 	rdb := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
 	})
 
-	contestantID := "contestant_001"
-	results := consumeFromRedpanda(100)
-	score, latencies := computeScore(results, contestantID)
-	printScore(score)
-	printHistogram(latencies)
-	pushLeaderboard(rdb, score)
+	allResults := consumeFromRedpanda(*expectedResults)
+
+	waveMap := map[int][]Result{}
+	for _, r := range allResults {
+		waveMap[r.Wave] = append(waveMap[r.Wave], r)
+	}
+
+	waveLabels := map[int]string{
+		1: "Limit Orders",
+		2: "Market Orders",
+		3: "Cancel Orders",
+		4: "Mixed Sustained",
+	}
+
+	var waves []WaveScore
+	var allLatencies []float64
+	totalSuccess, totalCount := 0, 0
+
+	for i := 1; i <= 4; i++ {
+		ws := scoreWave(waveMap[i], i, waveLabels[i])
+		waves = append(waves, ws)
+		for _, r := range waveMap[i] {
+			allLatencies = append(allLatencies, float64(r.Latency)/float64(time.Millisecond))
+			totalCount++
+			if r.Success {
+				totalSuccess++
+			}
+		}
+	}
+
+	sort.Float64s(allLatencies)
+	overallP99 := percentile(allLatencies, 99)
+	overallSR := float64(totalSuccess) / float64(totalCount) * 100
+
+	overallScore := 0.0
+	for _, w := range waves {
+		overallScore += w.Score
+	}
+	overallScore /= float64(len(waves))
+
+	final := FinalScore{
+		ContestantID: *contestantID,
+		Waves:        waves,
+		OverallScore: overallScore,
+		OverallP99:   overallP99,
+		OverallSR:    overallSR,
+	}
+
+	printFinalScore(final)
+	printHistogram(allLatencies)
+	pushLeaderboard(rdb, final)
 }
