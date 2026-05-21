@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -10,17 +11,17 @@ import (
 	"path/filepath"
 )
 
-func executeContestantBinary(binaryPath string) {
-	fmt.Printf("Preparing to run %s in secure Docker container...\n", binaryPath)
+// We define a struct to format our response cleanly
+type ExecutionResult struct {
+	Status string `json:"status"`
+	Output string `json:"output"`
+	Error  string `json:"error,omitempty"`
+}
 
-	// We need the absolute path of the file on your Mac to mount it into Docker
-	absPath, err := filepath.Abs(binaryPath)
-	if err != nil {
-		fmt.Printf("Error getting absolute path: %v\n", err)
-		return
-	}
+func executeContestantBinary(binaryPath string) ExecutionResult {
+	fmt.Printf("Executing %s...\n", binaryPath)
+	absPath, _ := filepath.Abs(binaryPath)
 
-	// The '-v' flag mounts the uploaded file into the container at '/app/contestant_bot'
 	cmd := exec.Command("docker", "run", "--rm",
 		"--memory=256m",
 		"--cpus=1.0",
@@ -31,13 +32,22 @@ func executeContestantBinary(binaryPath string) {
 		"ubuntu:22.04", 
 		"/app/contestant_bot")
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("Container execution failed: %v\nOutput: %s\n", err, string(output))
-		return
+	// Capture the raw output from the Docker container
+	rawOutput, err := cmd.CombinedOutput()
+	
+	// Package the output into our JSON struct
+	result := ExecutionResult{
+		Output: string(rawOutput),
 	}
 
-	fmt.Printf("Container Output:\n%s\n", string(output))
+	if err != nil {
+		result.Status = "Failed"
+		result.Error = err.Error()
+	} else {
+		result.Status = "Success"
+	}
+
+	return result
 }
 
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -46,10 +56,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Parse the incoming file (up to 10 MB limit)
 	r.ParseMultipartForm(10 << 20)
-
-	// 2. Retrieve the file from the request
 	file, handler, err := r.FormFile("binary")
 	if err != nil {
 		http.Error(w, "Error retrieving the file", http.StatusBadRequest)
@@ -57,39 +64,27 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// 3. Create an 'uploads' directory if it doesn't exist yet
 	os.MkdirAll("./uploads", os.ModePerm)
-
-	// 4. Create the destination file on your machine
 	dstPath := filepath.Join("./uploads", handler.Filename)
-	dst, err := os.Create(dstPath)
-	if err != nil {
-		http.Error(w, "Error saving the file", http.StatusInternalServerError)
-		return
-	}
+	dst, _ := os.Create(dstPath)
 	defer dst.Close()
-
-	// 5. Copy the downloaded data into your new file
-	if _, err := io.Copy(dst, file); err != nil {
-		http.Error(w, "Error writing the file", http.StatusInternalServerError)
-		return
-	}
-	
-	// 6. Ensure the file has execution permissions
+	io.Copy(dst, file)
 	os.Chmod(dstPath, 0755)
 
-	fmt.Fprintf(w, "Successfully uploaded %s! Kickstarting execution...\n", handler.Filename)
+	// Run the binary and get the structured result
+	result := executeContestantBinary(dstPath)
 
-	// 7. Trigger the Docker container using the real file we just saved!
-	executeContestantBinary(dstPath)
+	// Send the result back to the user as clean JSON!
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 func main() {
 	http.HandleFunc("/upload", uploadHandler)
 	
 	port := ":8080"
-	fmt.Printf("Sandbox Engine API starting on port %s...\n", port)
+	fmt.Printf("Sandbox API (JSON Output) starting on port %s...\n", port)
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
-}
+}}
