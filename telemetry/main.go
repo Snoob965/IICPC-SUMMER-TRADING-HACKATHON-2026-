@@ -44,6 +44,12 @@ type FinalScore struct {
 	OverallSR    float64     `json:"overall_success_rate"`
 }
 
+type StepStats struct {
+	BotCount int
+	P99      float64
+	SR       float64
+}
+
 func percentile(latencies []float64, p float64) float64 {
 	if len(latencies) == 0 {
 		return 0
@@ -113,6 +119,82 @@ func scoreWave(results []Result, waveNum int, label string) WaveScore {
 		Correctness: correctness,
 		TPS:         tps,
 		Score:       score,
+	}
+}
+
+func getStepStats(results []Result, maxBots int) []StepStats {
+	third := len(results) / 3
+	if third == 0 {
+		return nil
+	}
+
+	steps := []struct {
+		botCount int
+		results  []Result
+	}{
+		{maxBots / 10, results[:third]},
+		{maxBots / 2, results[third : third*2]},
+		{maxBots, results[third*2:]},
+	}
+
+	var stats []StepStats
+	for _, step := range steps {
+		var latencies []float64
+		success, total := 0, 0
+		for _, r := range step.results {
+			latencies = append(latencies, float64(r.Latency)/float64(time.Millisecond))
+			total++
+			if r.Success {
+				success++
+			}
+		}
+		sort.Float64s(latencies)
+		p99 := percentile(latencies, 99)
+		sr := float64(success) / float64(total) * 100
+		stats = append(stats, StepStats{BotCount: step.botCount, P99: p99, SR: sr})
+	}
+	return stats
+}
+
+func detectBreakingPoint(waveMap map[int][]Result, maxBots int) {
+	waveLabels := map[int]string{
+		1: "Limit Orders",
+		2: "Market Orders",
+		3: "Cancel Orders",
+		4: "Mixed",
+	}
+
+	fmt.Printf("\n--- Breaking Point Analysis ---\n")
+
+	for waveNum := 1; waveNum <= 4; waveNum++ {
+		steps := getStepStats(waveMap[waveNum], maxBots)
+		if steps == nil {
+			continue
+		}
+
+		stableUpto := 0
+		degradationPoint := 0
+		breakingPoint := 0
+
+		for _, s := range steps {
+			if s.P99 < 50 && s.SR >= 99 {
+				stableUpto = s.BotCount
+			} else if s.P99 >= 50 && s.P99 < 200 && s.SR >= 95 && degradationPoint == 0 {
+				degradationPoint = s.BotCount
+			} else if (s.P99 >= 200 || s.SR < 95) && breakingPoint == 0 {
+				breakingPoint = s.BotCount
+			}
+		}
+
+		fmt.Printf("Wave %d %-15s ", waveNum, waveLabels[waveNum])
+
+		if breakingPoint > 0 {
+			fmt.Printf("✗ Stable up to %d bots | breaking point at %d bots (p99 spike / errors)\n", stableUpto, breakingPoint)
+		} else if degradationPoint > 0 {
+			fmt.Printf("⚠ Stable up to %d bots | degradation starts at %d bots\n", stableUpto, degradationPoint)
+		} else {
+			fmt.Printf("✓ Stable across all load levels (p99 < 50ms throughout)\n")
+		}
 	}
 }
 
@@ -209,6 +291,7 @@ func printFinalScore(final FinalScore) {
 func main() {
 	expectedResults := flag.Int("expected", 640, "Expected number of results from Redpanda")
 	contestantID := flag.String("contestant", "contestant_001", "Contestant ID to score")
+	maxBots := flag.Int("maxbots", 100, "Max bots used in the stress test")
 	flag.Parse()
 
 	rdb := redis.NewClient(&redis.Options{
@@ -265,5 +348,6 @@ func main() {
 
 	printFinalScore(final)
 	printHistogram(allLatencies)
+	detectBreakingPoint(waveMap, *maxBots)
 	pushLeaderboard(rdb, final)
 }
