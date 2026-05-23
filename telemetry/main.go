@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -84,12 +85,25 @@ func consumeFromRedpanda(expectedCount int) []Result {
 	return results
 }
 
+func checkSampleSize(results []Result, waveNum int) {
+	if len(results) < 1000 {
+		fmt.Printf("⚠  Wave %d: only %d samples — p99 may not be statistically reliable (need 1000+). Run with --bots 1000 for valid p99.\n", waveNum, len(results))
+	}
+}
+
 func scoreWave(results []Result, waveNum int, label string) WaveScore {
-	var latencies []float64
+	// HDR Histogram — O(1) per recording, ~40KB memory, no sorting needed
+	// range: 1 microsecond to 1 minute, 3 significant digits
+	hist := hdrhistogram.New(1, 60000, 3)
+
 	success, correct, total := 0, 0, 0
 
 	for _, r := range results {
-		latencies = append(latencies, float64(r.Latency)/float64(time.Millisecond))
+		latencyMs := r.Latency.Milliseconds()
+		if latencyMs < 1 {
+			latencyMs = 1
+		}
+		hist.RecordValue(latencyMs)
 		total++
 		if r.Success {
 			success++
@@ -99,11 +113,9 @@ func scoreWave(results []Result, waveNum int, label string) WaveScore {
 		}
 	}
 
-	sort.Float64s(latencies)
-
-	p50 := percentile(latencies, 50)
-	p90 := percentile(latencies, 90)
-	p99 := percentile(latencies, 99)
+	p50 := float64(hist.ValueAtQuantile(50))
+	p90 := float64(hist.ValueAtQuantile(90))
+	p99 := float64(hist.ValueAtQuantile(99))
 	successRate := float64(success) / float64(total) * 100
 	correctness := float64(correct) / float64(total) * 100
 	tps := float64(total) / 15.0
@@ -189,12 +201,65 @@ func detectBreakingPoint(waveMap map[int][]Result, maxBots int) {
 		fmt.Printf("Wave %d %-15s ", waveNum, waveLabels[waveNum])
 
 		if breakingPoint > 0 {
-			fmt.Printf("✗ Stable up to %d bots | breaking point at %d bots (p99 spike / errors)\n", stableUpto, breakingPoint)
+			fmt.Printf("✗ Stable up to %d bots | breaking point at %d bots\n", stableUpto, breakingPoint)
 		} else if degradationPoint > 0 {
 			fmt.Printf("⚠ Stable up to %d bots | degradation starts at %d bots\n", stableUpto, degradationPoint)
 		} else {
 			fmt.Printf("✓ Stable across all load levels (p99 < 50ms throughout)\n")
 		}
+	}
+}
+
+func printHDRHistogram(results []Result) {
+	hist := hdrhistogram.New(1, 60000, 3)
+	for _, r := range results {
+		latencyMs := r.Latency.Milliseconds()
+		if latencyMs < 1 {
+			latencyMs = 1
+		}
+		hist.RecordValue(latencyMs)
+	}
+
+	fmt.Printf("\n--- Latency Histogram (HDR) ---\n")
+	fmt.Printf("Min: %dms  Max: %dms  Mean: %.1fms\n",
+		hist.Min(), hist.Max(), hist.Mean())
+	fmt.Printf("P50: %dms  P90: %dms  P99: %dms  P99.9: %dms\n\n",
+		hist.ValueAtQuantile(50),
+		hist.ValueAtQuantile(90),
+		hist.ValueAtQuantile(99),
+		hist.ValueAtQuantile(99.9),
+	)
+
+	buckets := []struct {
+		label string
+		min   int64
+		max   int64
+	}{
+		{"0-10ms", 0, 10},
+		{"10-50ms", 11, 50},
+		{"50-100ms", 51, 100},
+		{"100-250ms", 101, 250},
+		{"250-500ms", 251, 500},
+		{"500ms+", 501, 60000},
+	}
+
+	total := len(results)
+	for _, b := range buckets {
+		count := 0
+		for _, r := range results {
+			ms := r.Latency.Milliseconds()
+			if ms >= b.min && ms <= b.max {
+				count++
+			}
+		}
+		pct := float64(count) / float64(total) * 100
+		bar := int(pct / 2)
+		fmt.Printf("%-12s │%s %d (%.1f%%)\n",
+			b.label,
+			repeatChar("█", bar),
+			count,
+			pct,
+		)
 	}
 }
 
@@ -204,43 +269,6 @@ func repeatChar(c string, n int) string {
 		result += c
 	}
 	return result
-}
-
-func printHistogram(latencies []float64) {
-	buckets := []struct {
-		label string
-		max   float64
-	}{
-		{"0-10ms", 10},
-		{"10-50ms", 50},
-		{"50-100ms", 100},
-		{"100-250ms", 250},
-		{"250-500ms", 500},
-		{"500ms+", math.MaxFloat64},
-	}
-
-	counts := make([]int, len(buckets))
-	for _, l := range latencies {
-		for i, b := range buckets {
-			if l <= b.max {
-				counts[i]++
-				break
-			}
-		}
-	}
-
-	total := len(latencies)
-	fmt.Printf("\n--- Latency Histogram (all waves) ---\n")
-	for i, b := range buckets {
-		pct := float64(counts[i]) / float64(total) * 100
-		bar := int(pct / 2)
-		fmt.Printf("%-12s │%s %d (%.1f%%)\n",
-			b.label,
-			repeatChar("█", bar),
-			counts[i],
-			pct,
-		)
-	}
 }
 
 func pushLeaderboard(rdb *redis.Client, final FinalScore) {
@@ -276,13 +304,13 @@ func printFinalScore(final FinalScore) {
 			status = "✗"
 		}
 		fmt.Printf("\nWave %d %-20s %s\n", w.WaveNum, label, status)
-		fmt.Printf("  P50: %.2fms  P90: %.2fms  P99: %.2fms\n", w.P50, w.P90, w.P99)
+		fmt.Printf("  P50: %.0fms  P90: %.0fms  P99: %.0fms\n", w.P50, w.P90, w.P99)
 		fmt.Printf("  Success: %.1f%%  Correct: %.1f%%  TPS: %.1f\n", w.SuccessRate, w.Correctness, w.TPS)
 		fmt.Printf("  Wave Score: %.4f\n", w.Score)
 	}
 
 	fmt.Printf("\n──────────────────────────────────────────────\n")
-	fmt.Printf("Overall P99:     %.2fms\n", final.OverallP99)
+	fmt.Printf("Overall P99:     %.0fms\n", final.OverallP99)
 	fmt.Printf("Overall Success: %.1f%%\n", final.OverallSR)
 	fmt.Printf("FINAL SCORE:     %.4f\n", final.OverallScore)
 	fmt.Printf("──────────────────────────────────────────────\n")
@@ -317,6 +345,7 @@ func main() {
 	totalSuccess, totalCount := 0, 0
 
 	for i := 1; i <= 4; i++ {
+		checkSampleSize(waveMap[i], i)
 		ws := scoreWave(waveMap[i], i, waveLabels[i])
 		waves = append(waves, ws)
 		for _, r := range waveMap[i] {
@@ -347,7 +376,7 @@ func main() {
 	}
 
 	printFinalScore(final)
-	printHistogram(allLatencies)
+	printHDRHistogram(allResults)
 	detectBreakingPoint(waveMap, *maxBots)
 	pushLeaderboard(rdb, final)
 }
