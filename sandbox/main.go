@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,9 +10,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/redis/go-redis/v9"
 )
 
-// We define a struct to format our response cleanly
+var ctx = context.Background()
+
+// Initialize the Redis client to connect to your team's local infrastructure
+var rdb = redis.NewClient(&redis.Options{
+	Addr:     "localhost:6379", // Default Redis port
+	Password: "",               // No password set in local docker-compose
+	DB:       0,                // Default DB
+})
+
 type ExecutionResult struct {
 	Status string `json:"status"`
 	Output string `json:"output"`
@@ -32,10 +43,8 @@ func executeContestantBinary(binaryPath string) ExecutionResult {
 		"ubuntu:22.04", 
 		"/app/contestant_bot")
 
-	// Capture the raw output from the Docker container
 	rawOutput, err := cmd.CombinedOutput()
 	
-	// Package the output into our JSON struct
 	result := ExecutionResult{
 		Output: string(rawOutput),
 	}
@@ -71,20 +80,30 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(dst, file)
 	os.Chmod(dstPath, 0755)
 
-	// Run the binary and get the structured result
+	// Get the structured result
 	result := executeContestantBinary(dstPath)
 
-	// Send the result back to the user as clean JSON!
+	// Convert the result into a JSON string
+	jsonString, _ := json.Marshal(result)
+
+	// NEW: Publish the JSON string to the "sandbox_logs" Redis channel
+	err = rdb.Publish(ctx, "sandbox_logs", jsonString).Err()
+	if err != nil {
+		fmt.Printf("Failed to publish to Redis: %v\n", err)
+	} else {
+		fmt.Println("Successfully published execution logs to Redis!")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	w.Write(jsonString)
 }
 
 func main() {
 	http.HandleFunc("/upload", uploadHandler)
 	
 	port := ":8080"
-	fmt.Printf("Sandbox API (JSON Output) starting on port %s...\n", port)
+	fmt.Printf("Sandbox API (Redis Publisher) starting on port %s...\n", port)
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
-}}
+}
