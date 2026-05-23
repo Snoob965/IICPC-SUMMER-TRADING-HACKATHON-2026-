@@ -3,6 +3,7 @@ module github.com/Snoob965/IICPC-SUMMER-TRADING-HACKATHON-2026-/telemetry
 go 1.25.0
 
 require (
+	github.com/HdrHistogram/hdrhistogram-go v1.2.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect

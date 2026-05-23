@@ -1,3 +1,5 @@
+github.com/HdrHistogram/hdrhistogram-go v1.2.0 h1:XMJkDWuz6bM9Fzy7zORuVFKH7ZJY41G2q8KWhVGkNiY=
+github.com/HdrHistogram/hdrhistogram-go v1.2.0/go.mod h1:CiIeGiHSd06zjX+FypuEJ5EQ07KKtxZ+8J6hszwVQig=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/klauspost/compress v1.18.5 h1:/h1gH5Ce+VWNLSWqPzOVn6XBO+vJbCNGvjoaGBFW2IE=
