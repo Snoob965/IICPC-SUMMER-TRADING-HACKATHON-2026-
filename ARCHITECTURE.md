@@ -15,57 +15,57 @@ This platform evaluates contestant-submitted trading infrastructure by container
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        CONTESTANT                               │
-│                    uploads binary/source                        │
+│                   uploads binary/source                         │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                  SANDBOX ENGINE                                 │
+│                        SANDBOX ENGINE                           │
 │         Docker container with CPU pinning + memory limits       │
-│         Exposes: POST /order  GET /orderbook                    │
+│               Exposes: POST /order  GET /orderbook              │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   BOT FLEET (Go)                                │
-│         4-wave stress test with ramping load                    │
-│         Wave 1: Limit Orders  (10% → 50% → 100% of max bots)  │
-│         Wave 2: Market Orders (10% → 50% → 100% of max bots)  │
-│         Wave 3: Cancel Orders (10% → 50% → 100% of max bots)  │
-│         Wave 4: Mixed Sustained (all order types, full load)   │
-│         Per-bot: measures latency + correctness validation      │
+│                        BOT FLEET (Go)                           │
+│             4-wave stress test with ramping load                │
+│        Wave 1: Limit Orders  (10% → 50% → 100% of max bots)     │
+│        Wave 2: Market Orders (10% → 50% → 100% of max bots)     │
+│        Wave 3: Cancel Orders (10% → 50% → 100% of max bots)     │
+│        Wave 4: Mixed Sustained (all order types, full load)     │
+│        Per-bot: measures latency + correctness validation       │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     REDPANDA                                    │
-│              Topic: bot-results                                 │
-│         Decouples bot fleet from telemetry ingester             │
-│         Handles millions of events/sec, no JVM overhead         │
+│                           REDPANDA                              │
+│                      Topic: bot-results                         │
+│            Decouples bot fleet from telemetry ingester          │
+│          Handles millions of events/sec, no JVM overhead        │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│               TELEMETRY INGESTER (Go)                           │
-│         Consumes from Redpanda topic                            │
-│         Computes per wave: p50 / p90 / p99 / TPS / correctness │
-│         Latency histogram across all waves                      │
-│         Breaking point detection per wave                       │
-│         Score = (1000/(p99+1)) × success_rate × correctness    │
+│                     TELEMETRY INGESTER (Go)                     │
+│                  Consumes from Redpanda topic                   │
+│      Computes per wave: p50 / p90 / p99 / TPS / correctness     │
+│               Latency histogram across all waves                │
+│                Breaking point detection per wave                │
+│        Score = (1000/(p99+1)) × success_rate × correctness      │
 └──────────────┬──────────────────────────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────┐
-│            REDIS                 │
-│  leaderboard:ranking (sorted set)│
-│  leaderboard:scores  (hash)      │
+│              REDIS               │
+│ leaderboard:ranking (sorted set) │
+│   leaderboard:scores  (hash)     │
 └──────────────┬───────────────────┘
                │
                ▼
 ┌──────────────────────────────────┐
 │       LEADERBOARD FRONTEND       │
-│   WebSocket stream of live scores│
-│   Per-wave breakdown + charts    │
+│  WebSocket stream of live scores │
+│    Per-wave breakdown + charts   │
 └──────────────────────────────────┘
 ```
 
