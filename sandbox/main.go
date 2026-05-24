@@ -16,17 +16,18 @@ import (
 
 var ctx = context.Background()
 
-// Initialize the Redis client to connect to your team's local infrastructure
 var rdb = redis.NewClient(&redis.Options{
-	Addr:     "localhost:6379", // Default Redis port
-	Password: "",               // No password set in local docker-compose
-	DB:       0,                // Default DB
+	Addr:     "localhost:6379",
+	Password: "",               
+	DB:       0,                
 })
 
+// UPDATE: Added the Validation struct from validator.go
 type ExecutionResult struct {
-	Status string `json:"status"`
-	Output string `json:"output"`
-	Error  string `json:"error,omitempty"`
+	Status     string           `json:"status"`
+	Output     string           `json:"output"`
+	Validation ValidationResult `json:"validation"`
+	Error      string           `json:"error,omitempty"`
 }
 
 func executeContestantBinary(binaryPath string) ExecutionResult {
@@ -44,9 +45,14 @@ func executeContestantBinary(binaryPath string) ExecutionResult {
 		"/app/contestant_bot")
 
 	rawOutput, err := cmd.CombinedOutput()
+	outputStr := string(rawOutput)
 	
+	// NEW: Run the algorithmic validation on the raw logs!
+	validationScore := ValidateExecutionLogs(outputStr)
+
 	result := ExecutionResult{
-		Output: string(rawOutput),
+		Output:     outputStr,
+		Validation: validationScore,
 	}
 
 	if err != nil {
@@ -80,19 +86,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(dst, file)
 	os.Chmod(dstPath, 0755)
 
-	// Get the structured result
 	result := executeContestantBinary(dstPath)
-
-	// Convert the result into a JSON string
 	jsonString, _ := json.Marshal(result)
 
-	// NEW: Publish the JSON string to the "sandbox_logs" Redis channel
-	err = rdb.Publish(ctx, "sandbox_logs", jsonString).Err()
-	if err != nil {
-		fmt.Printf("Failed to publish to Redis: %v\n", err)
-	} else {
-		fmt.Println("Successfully published execution logs to Redis!")
-	}
+	rdb.Publish(ctx, "sandbox_logs", jsonString)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(jsonString)
@@ -102,7 +99,7 @@ func main() {
 	http.HandleFunc("/upload", uploadHandler)
 	
 	port := ":8080"
-	fmt.Printf("Sandbox API (Redis Publisher) starting on port %s...\n", port)
+	fmt.Printf("Sandbox Engine API + Validator starting on port %s...\n", port)
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
