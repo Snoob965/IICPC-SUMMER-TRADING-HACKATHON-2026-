@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IICPC 2026 Live Leaderboard</title>
+    <style>
+        body { font-family: 'Courier New', Courier, monospace; background: #121212; color: #00ff00; padding: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #333; padding: 10px; text-align: left; }
+        th { background-color: #1e1e1e; }
+        .live-indicator { color: red; font-weight: bold; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+    <h1>IICPC Trading Engine Benchmark <span class="live-indicator">● LIVE</span></h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Rank</th>
+                <th>Contestant ID</th>
+                <th>Score</th>
+                <th>P99 Latency (ms)</th>
+                <th>Success Rate</th>
+                <th>Correctness</th>
+            </tr>
+        </thead>
+        <tbody id="leaderboard-body">
+            </tbody>
+    </table>
+
+    <script>
+        const ws = new WebSocket('ws://localhost:8081/ws');
+        const tbody = document.getElementById('leaderboard-body');
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            tbody.innerHTML = ''; 
+            
+            data.forEach((contestant, index) => {
+                const row = `<tr>
+                    <td>${index + 1}</td>
+                    <td>${contestant.contestant_id}</td>
+                    <td>${parseFloat(contestant.score).toFixed(2)}</td>
+                    <td>${contestant.p99_ms}</td>
+                    <td>${contestant.success_rate}%</td>
+                    <td>${contestant.correctness}%</td>
+                </tr>`;
+                tbody.innerHTML += row;
+            });
+        };
+    </script>
+</body>
+</html>
