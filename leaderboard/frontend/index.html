@@ -5,51 +5,133 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IICPC 2026 Live Leaderboard</title>
     <style>
-        body { font-family: 'Courier New', Courier, monospace; background: #121212; color: #00ff00; padding: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #333; padding: 10px; text-align: left; }
-        th { background-color: #1e1e1e; }
-        .live-indicator { color: red; font-weight: bold; animation: blink 1s infinite; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Courier New', monospace; background: #0d1117; color: #c9d1d9; padding: 24px; }
+        h1 { color: #58a6ff; font-size: 1.6rem; margin-bottom: 4px; }
+        .subtitle { color: #8b949e; font-size: 0.85rem; margin-bottom: 24px; }
+        .live { color: #f85149; font-weight: bold; animation: blink 1s infinite; }
         @keyframes blink { 50% { opacity: 0; } }
+        .status { margin-bottom: 16px; font-size: 0.85rem; color: #8b949e; }
+        .status.connected { color: #3fb950; }
+        .status.disconnected { color: #f85149; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
+        th { background: #161b22; color: #58a6ff; padding: 12px; text-align: left; border-bottom: 1px solid #30363d; font-size: 0.8rem; text-transform: uppercase; }
+        td { padding: 12px; border-bottom: 1px solid #21262d; font-size: 0.9rem; }
+        tr:hover td { background: #161b22; }
+        .rank-1 td:first-child { color: #ffd700; font-weight: bold; }
+        .rank-2 td:first-child { color: #c0c0c0; font-weight: bold; }
+        .rank-3 td:first-child { color: #cd7f32; font-weight: bold; }
+        .score { color: #3fb950; font-weight: bold; }
+        .good { color: #3fb950; }
+        .warn { color: #d29922; }
+        .bad  { color: #f85149; }
+        .wave-details { display: none; background: #161b22; padding: 12px; margin-top: 4px; border-radius: 4px; font-size: 0.8rem; }
+        .wave-details table { margin: 0; }
+        .wave-details th { font-size: 0.75rem; }
+        .wave-details td { font-size: 0.8rem; padding: 6px 12px; }
+        .expand-btn { cursor: pointer; color: #58a6ff; font-size: 0.8rem; background: none; border: none; color: #58a6ff; }
+        .expand-btn:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
-    <h1>IICPC Trading Engine Benchmark <span class="live-indicator">● LIVE</span></h1>
+    <h1>IICPC Trading Engine Benchmark <span class="live">● LIVE</span></h1>
+    <p class="subtitle">Distributed Matching Engine Benchmarking Platform — IICPC Summer Hackathon 2026</p>
+    <p class="status disconnected" id="status">⚡ Connecting...</p>
+
     <table>
         <thead>
             <tr>
                 <th>Rank</th>
-                <th>Contestant ID</th>
+                <th>Contestant</th>
                 <th>Score</th>
-                <th>P99 Latency (ms)</th>
+                <th>Overall P99</th>
                 <th>Success Rate</th>
-                <th>Correctness</th>
+                <th>Details</th>
             </tr>
         </thead>
-        <tbody id="leaderboard-body">
-            </tbody>
+        <tbody id="leaderboard-body"></tbody>
     </table>
 
     <script>
         const ws = new WebSocket('ws://localhost:8081/ws');
         const tbody = document.getElementById('leaderboard-body');
+        const statusEl = document.getElementById('status');
+
+        ws.onopen = () => {
+            statusEl.textContent = '✓ Connected — live updates every second';
+            statusEl.className = 'status connected';
+        };
+
+        ws.onclose = () => {
+            statusEl.textContent = '✗ Disconnected';
+            statusEl.className = 'status disconnected';
+        };
+
+        function colorByValue(val, goodThreshold, warnThreshold) {
+            if (val >= goodThreshold) return 'good';
+            if (val >= warnThreshold) return 'warn';
+            return 'bad';
+        }
+
+        function colorByLatency(ms) {
+            if (ms <= 50) return 'good';
+            if (ms <= 200) return 'warn';
+            return 'bad';
+        }
 
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            tbody.innerHTML = ''; 
-            
-            data.forEach((contestant, index) => {
-                const row = `<tr>
-                    <td>${index + 1}</td>
-                    <td>${contestant.contestant_id}</td>
-                    <td>${parseFloat(contestant.score).toFixed(2)}</td>
-                    <td>${contestant.p99_ms}</td>
-                    <td>${contestant.success_rate}%</td>
-                    <td>${contestant.correctness}%</td>
-                </tr>`;
-                tbody.innerHTML += row;
+            if (!data || data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#8b949e">No contestants yet</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = '';
+            data.forEach((c, index) => {
+                const rankClass = index < 3 ? `rank-${index+1}` : '';
+                const scoreColor = c.overall_score > 50 ? 'good' : c.overall_score > 20 ? 'warn' : 'bad';
+                const p99Color = colorByLatency(c.overall_p99);
+                const srColor = colorByValue(c.overall_success_rate, 99, 95);
+
+                const waveRows = (c.waves || []).map(w => `
+                    <tr>
+                        <td>Wave ${w.wave_num} ${w.label}</td>
+                        <td class="${colorByLatency(w.p99_ms)}">${w.p99_ms}ms</td>
+                        <td class="${colorByValue(w.success_rate, 99, 95)}">${w.success_rate?.toFixed(1)}%</td>
+                        <td class="${colorByValue(w.correctness, 99, 95)}">${w.correctness?.toFixed(1)}%</td>
+                        <td>${w.score?.toFixed(2)}</td>
+                    </tr>
+                `).join('');
+
+                const waveTable = c.waves?.length > 0 ? `
+                    <div class="wave-details" id="waves-${index}">
+                        <table>
+                            <thead><tr><th>Wave</th><th>P99</th><th>Success</th><th>Correct</th><th>Score</th></tr></thead>
+                            <tbody>${waveRows}</tbody>
+                        </table>
+                    </div>
+                ` : '';
+
+                tbody.innerHTML += `
+                    <tr class="${rankClass}">
+                        <td>${index + 1}</td>
+                        <td>${c.contestant_id}</td>
+                        <td class="score ${scoreColor}">${c.overall_score?.toFixed(2)}</td>
+                        <td class="${p99Color}">${c.overall_p99?.toFixed(0)}ms</td>
+                        <td class="${srColor}">${c.overall_success_rate?.toFixed(1)}%</td>
+                        <td>
+                            <button class="expand-btn" onclick="toggleWaves(${index})">▼ waves</button>
+                        </td>
+                    </tr>
+                    <tr><td colspan="6" style="padding:0">${waveTable}</td></tr>
+                `;
             });
         };
+
+        function toggleWaves(index) {
+            const el = document.getElementById(`waves-${index}`);
+            if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        }
     </script>
 </body>
 </html>
