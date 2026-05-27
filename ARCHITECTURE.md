@@ -298,34 +298,45 @@ overhead are included in every measurement. Real exchange latency
 measurement uses kernel bypass networking (DPDK, io_uring) to
 measure from the moment a packet hits the NIC.
 
-Additionally, the correctness validation step (GET /orderbook after
-each limit order) adds an extra HTTP round trip that slightly inflates
-p99 measurements. A production implementation would separate
-correctness validation from latency measurement via a dedicated
-validation pass after the load test completes.
+The correctness validation step (GET /orderbook after each limit order)
+adds an extra HTTP round trip. In production this would be separated
+into a dedicated validation pass after the load test completes, keeping
+latency measurement clean.
 
-The current percentile computation stores all latency values in memory
-and sorts them — O(n log n). For high-volume tests (1M+ results) this
-becomes expensive. HDR Histogram (High Dynamic Range) would reduce
-this to O(1) per recording with ~40KB memory regardless of result
-count, and eliminates the coordinated omission problem by recording
-every latency value with full precision.
+### HDR Histogram — Implemented
 
-### Statistical Sample Size
+~~The current percentile computation stores all latency values in memory
+and sorts them — O(n log n).~~
 
-P99 requires a minimum of 1000 samples to be statistically meaningful.
-At 100 bots per wave step, each step produces ~100-160 samples —
-below the threshold for reliable p99. Running with --bots 1000
-produces sufficient sample sizes for valid percentile computation.
+**Resolved:** The telemetry ingester now uses HDR Histogram
+(High Dynamic Range) for O(1) per-recording latency capture with
+~40KB memory regardless of result count. Min/Max/Mean/P50/P90/P99/P99.9
+are all computed from the HDR histogram directly.
+
+### Statistical Sample Size — Implemented
+
+~~P99 requires a minimum of 1000 samples to be statistically meaningful.~~
+
+**Resolved:** The telemetry ingester enforces a minimum sample size
+warning at 1000 results per wave. Running with `--bots 1000` produces
+~1600 results per wave, satisfying the statistical threshold. The
+platform warns users if sample size is insufficient.
+
+### Dynamic Port Allocation — Partially Implemented
+
+The sandbox currently assigns port 8082 to all contestants. For true
+parallel testing, a port pool (8082-9082) must be allocated dynamically
+per contestant. This is the next sandboxing improvement required before
+1000-contestant parallel testing is possible.
 
 ### Horizontal Scaling
 
-The current architecture tests one contestant at a time. True 1000-
-contestant parallel testing requires Kubernetes horizontal pod
-autoscaling — each contestant runs in an isolated pod, the bot fleet
-spawns per-pod goroutine pools, and the telemetry ingester uses
+The current architecture tests one contestant at a time sequentially.
+True 1000-contestant parallel testing requires Kubernetes horizontal
+pod autoscaling — each contestant runs in an isolated pod, the bot
+fleet spawns per-pod goroutine pools, and the telemetry ingester uses
 Redpanda consumer groups to process per-contestant result streams
-independently.
+independently. Kubernetes manifests are in `infra/k8s/`.
 
 ### Price-Time Priority Correctness
 
@@ -336,6 +347,13 @@ are filled in arrival order. This requires persistent bot identities
 and fill notification parsing, similar to FIX protocol ExecutionReport
 messages.
 
+### Cross-Architecture Compilation
+
+Contestant binaries must be compiled for Linux AMD64 to run inside
+Ubuntu Docker containers. Mac ARM binaries are incompatible. The
+platform currently requires contestants to submit Linux binaries.
+A future improvement would auto-detect and cross-compile submissions
+server-side.
 ---
 
 ## Team
