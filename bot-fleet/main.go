@@ -5,14 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/rand"
 	"net/http"
 	"os"
-	"sort"
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -38,15 +37,15 @@ type Result struct {
 }
 
 type WaveResult struct {
-	WaveNum     int
-	Label       string
-	OrderType   string
-	BotCount    int
-	Results     []Result
-	P50         float64
-	P99         float64
-	SuccessRate float64
-	Correctness float64
+	WaveNum   int
+	Label     string
+	OrderType string
+	BotCount  int
+	Results   []Result
+	P50       float64
+	P99       float64
+	SR        float64
+	CR        float64
 }
 
 func makeOrder(botID int, orderType string) Order {
@@ -63,7 +62,6 @@ func makeOrder(botID int, orderType string) Order {
 	case "cancel":
 		return Order{BotID: botID, Type: "cancel", Side: side, Quantity: 1}
 	default:
-		// mixed
 		r := rand.Intn(10)
 		if r < 6 {
 			return Order{BotID: botID, Type: "limit", Side: side, Price: price, Quantity: rand.Intn(5) + 1}
@@ -153,16 +151,30 @@ func computeWaveStats(results []Result) (p50, p99, successRate, correctness floa
 		}
 	}
 
-	sort.Float64s(latencies)
-
-	idx50 := int(math.Ceil(50.0/100.0*float64(len(latencies)))) - 1
-	idx99 := int(math.Ceil(99.0/100.0*float64(len(latencies)))) - 1
-
-	if len(latencies) > 0 {
-		p50 = latencies[idx50]
-		p99 = latencies[idx99]
+	if len(latencies) == 0 {
+		return
 	}
 
+	// simple sort for wave-level stats
+	for i := 0; i < len(latencies); i++ {
+		for j := i + 1; j < len(latencies); j++ {
+			if latencies[j] < latencies[i] {
+				latencies[i], latencies[j] = latencies[j], latencies[i]
+			}
+		}
+	}
+
+	idx50 := int(float64(len(latencies))*0.50) - 1
+	idx99 := int(float64(len(latencies))*0.99) - 1
+	if idx50 < 0 {
+		idx50 = 0
+	}
+	if idx99 < 0 {
+		idx99 = 0
+	}
+
+	p50 = latencies[idx50]
+	p99 = latencies[idx99]
 	successRate = float64(success) / float64(total) * 100
 	correctness = float64(correct) / float64(total) * 100
 	return
@@ -172,6 +184,9 @@ func runWave(waveNum int, label string, orderType string, targetURL string, cont
 	fmt.Printf("\n[Wave %d - %s] duration: %v\n", waveNum, label, duration)
 
 	steps := []int{maxBots / 10, maxBots / 2, maxBots}
+	if steps[0] == 0 {
+		steps[0] = 1
+	}
 	stepDuration := duration / time.Duration(len(steps))
 
 	var allResults []Result
@@ -188,15 +203,15 @@ func runWave(waveNum int, label string, orderType string, targetURL string, cont
 	p50, p99, sr, cr := computeWaveStats(allResults)
 
 	return WaveResult{
-		WaveNum:     waveNum,
-		Label:       label,
-		OrderType:   orderType,
-		BotCount:    maxBots,
-		Results:     allResults,
-		P50:         p50,
-		P99:         p99,
-		SuccessRate: sr,
-		Correctness: cr,
+		WaveNum:   waveNum,
+		Label:     label,
+		OrderType: orderType,
+		BotCount:  maxBots,
+		Results:   allResults,
+		P50:       p50,
+		P99:       p99,
+		SR:        sr,
+		CR:        cr,
 	}
 }
 
@@ -222,35 +237,37 @@ func pushToRedpanda(results []Result, topic string) {
 	fmt.Printf("\nPushed %d total results to Redpanda topic: %s\n", len(results), topic)
 }
 
-func printFinalReport(waves []WaveResult, totalDuration time.Duration) float64 {
+func printFinalReport(waves []WaveResult, totalDuration time.Duration) {
 	fmt.Printf("\n╔══════════════════════════════════════════════╗\n")
 	fmt.Printf("║           STRESS TEST FINAL REPORT          ║\n")
 	fmt.Printf("╚══════════════════════════════════════════════╝\n")
 
-	var overallScore float64
-
 	for _, w := range waves {
 		status := "✓"
-		if w.SuccessRate < 95 {
+		if w.SR < 95 {
 			status = "⚠"
 		}
-		if w.SuccessRate < 80 {
+		if w.SR < 80 {
 			status = "✗"
 		}
 		fmt.Printf("\nWave %d %-20s %s  p50=%.1fms  p99=%.1fms  success=%.1f%%  correct=%.1f%%\n",
-			w.WaveNum, w.Label, status, w.P50, w.P99, w.SuccessRate, w.Correctness)
-
-		score := (1000.0 / (w.P99 + 1)) * (w.SuccessRate / 100.0) * (w.Correctness / 100.0)
-		overallScore += score
+			w.WaveNum, w.Label, status, w.P50, w.P99, w.SR, w.CR)
 	}
 
-	overallScore = overallScore / float64(len(waves))
 	fmt.Printf("\n──────────────────────────────────────────────\n")
-	fmt.Printf("Total Duration:  %v\n", totalDuration)
-	fmt.Printf("FINAL SCORE:     %.4f\n", overallScore)
+	fmt.Printf("Total Duration: %v\n", totalDuration)
 	fmt.Printf("──────────────────────────────────────────────\n")
+}
 
-	return overallScore
+func getTargetURL(rdb *redis.Client, contestantID string, fallback string) string {
+	port, err := rdb.Get(ctx, fmt.Sprintf("sandbox:%s:port", contestantID)).Result()
+	if err != nil {
+		fmt.Printf("No sandbox port found for %s, using fallback: %s\n", contestantID, fallback)
+		return fallback
+	}
+	url := fmt.Sprintf("http://localhost:%s", port)
+	fmt.Printf("Auto-discovered target: %s\n", url)
+	return url
 }
 
 func main() {
@@ -270,7 +287,10 @@ func main() {
 				os.Exit(1)
 			}
 
-			// split duration: 25% each for waves 1-3, 25% for wave 4
+			// auto-discover sandbox port from Redis if available
+			rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+			resolvedURL := getTargetURL(rdb, contestantID, targetURL)
+
 			waveDuration := totalDuration / 4
 
 			fmt.Printf("\n=== STRESS TEST: %v | %d bots | %s ===\n", totalDuration, numBots, contestantID)
@@ -278,10 +298,10 @@ func main() {
 			start := time.Now()
 			var allResults []Result
 
-			w1 := runWave(1, "Limit Orders", "limit", targetURL, contestantID, numBots, waveDuration)
-			w2 := runWave(2, "Market Orders", "market", targetURL, contestantID, numBots, waveDuration)
-			w3 := runWave(3, "Cancel Orders", "cancel", targetURL, contestantID, numBots, waveDuration)
-			w4 := runWave(4, "Mixed Sustained", "mixed", targetURL, contestantID, numBots, waveDuration)
+			w1 := runWave(1, "Limit Orders", "limit", resolvedURL, contestantID, numBots, waveDuration)
+			w2 := runWave(2, "Market Orders", "market", resolvedURL, contestantID, numBots, waveDuration)
+			w3 := runWave(3, "Cancel Orders", "cancel", resolvedURL, contestantID, numBots, waveDuration)
+			w4 := runWave(4, "Mixed Sustained", "mixed", resolvedURL, contestantID, numBots, waveDuration)
 
 			allResults = append(allResults, w1.Results...)
 			allResults = append(allResults, w2.Results...)
@@ -295,10 +315,10 @@ func main() {
 	}
 
 	rootCmd.Flags().IntVarP(&numBots, "bots", "b", 1000, "Number of concurrent bots")
-	rootCmd.Flags().StringVarP(&targetURL, "target", "t", "http://localhost:8080", "Target URL of contestant engine")
+	rootCmd.Flags().StringVarP(&targetURL, "target", "t", "http://localhost:8080", "Target URL fallback")
 	rootCmd.Flags().StringVarP(&contestantID, "contestant", "c", "contestant_001", "Contestant ID")
 	rootCmd.Flags().StringVarP(&topic, "topic", "p", "bot-results", "Redpanda topic")
-	rootCmd.Flags().StringVarP(&durationStr, "duration", "d", "60s", "Total test duration (e.g. 40s, 60s, 90s, 120s)")
+	rootCmd.Flags().StringVarP(&durationStr, "duration", "d", "60s", "Total test duration")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
