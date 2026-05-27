@@ -19,15 +19,17 @@ Contestants submit their matching engine or order book implementation. The platf
 
 ## Benchmark Numbers
 
-Measured on a local dummy target server:
+Tested with 1000 concurrent bots, 60s duration, 6400 total results:
 
-| Bots | Success Rate | Avg Latency | P99 Latency | Correctness |
-|------|-------------|-------------|-------------|-------------|
-| 100  | 100%        | 17ms        | 43ms        | 99%         |
-| 500  | 100%        | 88ms        | ~120ms      | 99%         |
-| 1000 | 100%        | 56ms        | 107ms       | 99%         |
+| Wave | P50 | P99 | Success | Correctness | TPS |
+|------|-----|-----|---------|-------------|-----|
+| Limit Orders | 37ms | 70ms | 100% | 98.9% | 106.7 |
+| Market Orders | 40ms | 85ms | 100% | 100% | 106.7 |
+| Cancel Orders | 39ms | 89ms | 100% | 100% | 106.7 |
+| Mixed Sustained | 33ms | 62ms | 100% | 99.4% | 106.7 |
 
----
+Breaking point: degradation detected at 500 bots for limit and mixed orders.
+Overall p99: 85ms under 1000 concurrent bots.
 
 ## Architecture
 
