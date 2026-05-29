@@ -4,222 +4,316 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IICPC 2026 Live Leaderboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Courier New', monospace; background: #0d1117; color: #c9d1d9; padding: 24px; }
+        body { font-family: 'Courier New', monospace; background: #0d1117; color: #c9d1d9; padding: 24px; min-height: 100vh; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
         h1 { color: #58a6ff; font-size: 1.6rem; margin-bottom: 4px; }
-        .subtitle { color: #8b949e; font-size: 0.85rem; margin-bottom: 24px; }
+        .subtitle { color: #8b949e; font-size: 0.85rem; }
         .live { color: #f85149; font-weight: bold; animation: blink 1s infinite; }
         @keyframes blink { 50% { opacity: 0; } }
-        .status { margin-bottom: 16px; font-size: 0.85rem; color: #8b949e; }
+        .header-right { text-align: right; }
+        .status { font-size: 0.85rem; margin-bottom: 4px; }
         .status.connected { color: #3fb950; }
         .status.disconnected { color: #f85149; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
-        th { background: #161b22; color: #58a6ff; padding: 12px; text-align: left; border-bottom: 1px solid #30363d; font-size: 0.8rem; text-transform: uppercase; }
-        td { padding: 12px; border-bottom: 1px solid #21262d; font-size: 0.9rem; }
-        tr:hover td { background: #161b22; }
-        .rank-1 td:first-child { color: #ffd700; font-weight: bold; }
-        .rank-2 td:first-child { color: #c0c0c0; font-weight: bold; }
-        .rank-3 td:first-child { color: #cd7f32; font-weight: bold; }
-        .score { font-weight: bold; }
-        .good { color: #3fb950; }
-        .warn { color: #d29922; }
-        .bad  { color: #f85149; }
-        .wave-details { display: none; background: #0d1117; padding: 16px; border: 1px solid #30363d; border-radius: 4px; }
-        .wave-details table { margin: 0 0 16px 0; }
-        .wave-details th { font-size: 0.75rem; background: #0d1117; }
-        .wave-details td { font-size: 0.8rem; padding: 8px 12px; }
-        .expand-btn { cursor: pointer; background: none; border: 1px solid #30363d; color: #58a6ff; padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; }
-        .expand-btn:hover { background: #161b22; }
-        .breaking-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
+        .countdown { font-size: 0.75rem; color: #8b949e; }
+        .stats-bar { display: flex; gap: 16px; margin-bottom: 24px; padding: 12px 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+        .stat-item { text-align: center; }
+        .stat-value { font-size: 1.4rem; font-weight: bold; color: #58a6ff; }
+        .stat-label { font-size: 0.7rem; color: #8b949e; text-transform: uppercase; }
+        .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; margin-bottom: 32px; }
+        .contestant-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; transition: border-color 0.2s; }
+        .contestant-card:hover { border-color: #58a6ff; }
+        .contestant-card.rank-1 { border-color: #ffd700; }
+        .contestant-card.rank-2 { border-color: #c0c0c0; }
+        .contestant-card.rank-3 { border-color: #cd7f32; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .card-rank { font-size: 1.8rem; font-weight: bold; color: #8b949e; width: 40px; }
+        .rank-1 .card-rank { color: #ffd700; }
+        .rank-2 .card-rank { color: #c0c0c0; }
+        .rank-3 .card-rank { color: #cd7f32; }
+        .card-name { font-size: 1rem; font-weight: bold; color: #c9d1d9; flex: 1; margin-left: 8px; }
+        .card-score { font-size: 1.6rem; font-weight: bold; }
+        .score-bar-bg { height: 6px; background: #21262d; border-radius: 3px; margin: 8px 0 12px 0; }
+        .score-bar { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+        .card-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+        .metric { text-align: center; padding: 8px; background: #0d1117; border-radius: 4px; }
+        .metric-value { font-size: 0.95rem; font-weight: bold; }
+        .metric-label { font-size: 0.65rem; color: #8b949e; text-transform: uppercase; margin-top: 2px; }
+        .breaking-badge { display: inline-block; font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; margin-bottom: 12px; }
         .badge-stable { background: #1a4a2a; color: #3fb950; }
         .badge-warn { background: #3a2e0a; color: #d29922; }
         .badge-bad { background: #3a1a1a; color: #f85149; }
-        .histogram { margin-top: 8px; }
-        .hist-row { display: flex; align-items: center; margin: 3px 0; font-size: 0.75rem; }
-        .hist-label { width: 80px; color: #8b949e; }
-        .hist-bar-bg { flex: 1; background: #21262d; border-radius: 2px; height: 14px; margin: 0 8px; }
-        .hist-bar { height: 100%; border-radius: 2px; background: #58a6ff; transition: width 0.3s; }
-        .hist-count { width: 80px; color: #8b949e; text-align: right; }
-        .section-title { color: #58a6ff; font-size: 0.75rem; text-transform: uppercase; margin: 12px 0 6px 0; letter-spacing: 1px; }
+        .chart-container { position: relative; height: 120px; margin-bottom: 12px; }
+        .expand-btn { width: 100%; padding: 6px; background: #0d1117; border: 1px solid #30363d; color: #58a6ff; border-radius: 4px; cursor: pointer; font-size: 0.8rem; font-family: 'Courier New', monospace; transition: background 0.2s; }
+        .expand-btn:hover { background: #21262d; }
+        .wave-details { display: none; margin-top: 12px; }
+        .wave-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+        .wave-table th { background: #0d1117; color: #58a6ff; padding: 6px 8px; text-align: left; font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid #30363d; }
+        .wave-table td { padding: 6px 8px; border-bottom: 1px solid #161b22; }
+        .hist-section { margin-top: 12px; }
+        .hist-title { font-size: 0.7rem; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+        .hist-row { display: flex; align-items: center; margin: 3px 0; }
+        .hist-label { width: 70px; font-size: 0.7rem; color: #8b949e; }
+        .hist-bar-bg { flex: 1; background: #21262d; border-radius: 2px; height: 12px; margin: 0 8px; }
+        .hist-bar { height: 100%; border-radius: 2px; transition: width 0.5s; }
+        .hist-pct { width: 40px; font-size: 0.7rem; color: #8b949e; text-align: right; }
+        .history-section { margin-top: 32px; }
+        .history-title { color: #58a6ff; font-size: 1rem; margin-bottom: 12px; }
+        .history-chart-container { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; height: 200px; }
+        .good { color: #3fb950; }
+        .warn { color: #d29922; }
+        .bad  { color: #f85149; }
     </style>
 </head>
 <body>
-    <h1>IICPC Trading Engine Benchmark <span class="live">● LIVE</span></h1>
-    <p class="subtitle">Distributed Matching Engine Benchmarking Platform — IICPC Summer Hackathon 2026</p>
-    <p class="status disconnected" id="status">⚡ Connecting...</p>
 
-    <table>
-        <thead>
+<div class="header">
+    <div>
+        <h1>IICPC Trading Engine Benchmark <span class="live">● LIVE</span></h1>
+        <p class="subtitle">Distributed Matching Engine Benchmarking Platform — IICPC Summer Hackathon 2026</p>
+    </div>
+    <div class="header-right">
+        <p class="status disconnected" id="status">⚡ Connecting...</p>
+        <p class="countdown" id="countdown"></p>
+    </div>
+</div>
+
+<div class="stats-bar">
+    <div class="stat-item"><div class="stat-value" id="stat-contestants">0</div><div class="stat-label">Contestants</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-best-score">-</div><div class="stat-label">Best Score</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-best-p99">-</div><div class="stat-label">Best P99</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-avg-score">-</div><div class="stat-label">Avg Score</div></div>
+</div>
+
+<div class="cards-grid" id="cards-grid"></div>
+
+<div class="history-section">
+    <div class="history-title">Score History</div>
+    <div class="history-chart-container">
+        <canvas id="history-chart"></canvas>
+    </div>
+</div>
+
+<script>
+const ws = new WebSocket('ws://localhost:8081/ws');
+const statusEl = document.getElementById('status');
+const countdownEl = document.getElementById('countdown');
+const grid = document.getElementById('cards-grid');
+const expandedRows = new Set();
+const scoreHistory = {};
+const chartInstances = {};
+let historyChart = null;
+let countdown = 1;
+
+setInterval(() => {
+    if (statusEl.className.includes('connected')) {
+        countdownEl.textContent = `updating in ${countdown}s`;
+        countdown = countdown <= 1 ? 1 : countdown - 1;
+    }
+}, 1000);
+
+ws.onopen = () => {
+    statusEl.textContent = '✓ Connected — live updates every second';
+    statusEl.className = 'status connected';
+};
+
+ws.onclose = () => {
+    statusEl.textContent = '✗ Disconnected';
+    statusEl.className = 'status disconnected';
+    countdownEl.textContent = '';
+};
+
+function colorByLatency(ms) {
+    if (ms <= 50) return '#3fb950';
+    if (ms <= 200) return '#d29922';
+    return '#f85149';
+}
+
+function colorClass(ms) {
+    if (ms <= 50) return 'good';
+    if (ms <= 200) return 'warn';
+    return 'bad';
+}
+
+function scoreColorClass(s) {
+    if (s > 50) return 'good';
+    if (s > 20) return 'warn';
+    return 'bad';
+}
+
+function scoreBarColor(s) {
+    if (s > 50) return '#3fb950';
+    if (s > 20) return '#d29922';
+    return '#f85149';
+}
+
+function getBreakingBadge(waves) {
+    if (!waves || !waves.length) return '<span class="breaking-badge badge-stable">✓ stable</span>';
+    const max = Math.max(...waves.map(w => w.p99_ms || 0));
+    if (max >= 200) return '<span class="breaking-badge badge-bad">✗ breaks under load</span>';
+    if (max >= 50) return '<span class="breaking-badge badge-warn">⚠ degrades under load</span>';
+    return '<span class="breaking-badge badge-stable">✓ stable across all waves</span>';
+}
+
+function renderWaveChart(canvasId, waves) {
+    if (!waves || !waves.length) return;
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
+
+    chartInstances[canvasId] = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: waves.map(w => w.label || `Wave ${w.wave_num}`),
+            datasets: [
+                { label: 'P50', data: waves.map(w => w.p50_ms || 0), backgroundColor: 'rgba(63,185,80,0.6)', borderColor: '#3fb950', borderWidth: 1 },
+                { label: 'P99', data: waves.map(w => w.p99_ms || 0), backgroundColor: 'rgba(248,81,73,0.6)', borderColor: '#f85149', borderWidth: 1 }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#8b949e', font: { size: 10 } } } },
+            scales: {
+                x: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { color: '#21262d' } },
+                y: { ticks: { color: '#8b949e', font: { size: 9 }, callback: v => v + 'ms' }, grid: { color: '#21262d' } }
+            }
+        }
+    });
+}
+
+function renderHistogram(waves) {
+    if (!waves || !waves.length) return '';
+    const buckets = [
+        { label: '0-10ms',    check: v => v <= 10 },
+        { label: '10-50ms',   check: v => v > 10 && v <= 50 },
+        { label: '50-100ms',  check: v => v > 50 && v <= 100 },
+        { label: '100-250ms', check: v => v > 100 && v <= 250 },
+        { label: '250ms+',    check: v => v > 250 },
+    ];
+    const p99s = waves.map(w => w.p99_ms || 0);
+    const total = p99s.length;
+    const rows = buckets.map(b => {
+        const count = p99s.filter(b.check).length;
+        const pct = total > 0 ? (count / total) * 100 : 0;
+        const color = b.label.includes('0-10') || b.label.includes('10-50') ? '#3fb950' : b.label.includes('50-100') ? '#d29922' : '#f85149';
+        return `<div class="hist-row"><span class="hist-label">${b.label}</span><div class="hist-bar-bg"><div class="hist-bar" style="width:${pct*2}%;background:${color}"></div></div><span class="hist-pct">${pct.toFixed(0)}%</span></div>`;
+    }).join('');
+    return `<div class="hist-section"><div class="hist-title">P99 Distribution across waves</div>${rows}</div>`;
+}
+
+function updateHistoryChart(data) {
+    const now = new Date().toLocaleTimeString();
+    data.forEach(c => {
+        if (!scoreHistory[c.contestant_id]) scoreHistory[c.contestant_id] = [];
+        scoreHistory[c.contestant_id].push({ time: now, score: c.overall_score });
+        if (scoreHistory[c.contestant_id].length > 20) scoreHistory[c.contestant_id].shift();
+    });
+    const colors = ['#58a6ff', '#3fb950', '#f85149', '#d29922', '#a371f7'];
+    const allTimes = [...new Set(Object.values(scoreHistory).flat().map(p => p.time))].slice(-20);
+    const datasets = Object.entries(scoreHistory).map(([id, points], i) => ({
+        label: id,
+        data: allTimes.map(t => { const p = points.find(x => x.time === t); return p ? p.score : null; }),
+        borderColor: colors[i % colors.length],
+        backgroundColor: 'transparent',
+        tension: 0.3, spanGaps: true, pointRadius: 3,
+    }));
+    if (!historyChart) {
+        historyChart = new Chart(document.getElementById('history-chart'), {
+            type: 'line',
+            data: { labels: allTimes, datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: '#8b949e', font: { size: 10 } } } },
+                scales: {
+                    x: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { color: '#21262d' } },
+                    y: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { color: '#21262d' } }
+                }
+            }
+        });
+    } else {
+        historyChart.data.labels = allTimes;
+        historyChart.data.datasets = datasets;
+        historyChart.update();
+    }
+}
+
+function updateStatsBar(data) {
+    const scores = data.map(c => c.overall_score || 0);
+    const p99s = data.map(c => c.overall_p99 || 0);
+    document.getElementById('stat-contestants').textContent = data.length;
+    document.getElementById('stat-best-score').textContent = Math.max(...scores).toFixed(1);
+    document.getElementById('stat-best-p99').textContent = Math.min(...p99s).toFixed(0) + 'ms';
+    document.getElementById('stat-avg-score').textContent = (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1);
+}
+
+ws.onmessage = function(event) {
+    countdown = 1;
+    const data = JSON.parse(event.data);
+    if (!data || !data.length) {
+        grid.innerHTML = '<p style="color:#8b949e">No contestants yet — waiting for submissions...</p>';
+        return;
+    }
+    updateStatsBar(data);
+    updateHistoryChart(data);
+    const maxScore = Math.max(...data.map(c => c.overall_score || 0));
+    grid.innerHTML = '';
+    data.forEach((c, index) => {
+        const rankClass = index < 3 ? `rank-${index+1}` : '';
+        const sc = c.overall_score || 0;
+        const scoreBarWidth = maxScore > 0 ? (sc / maxScore) * 100 : 0;
+        const chartId = `chart-${index}`;
+        const waveRows = (c.waves || []).map(w => `
             <tr>
-                <th>Rank</th>
-                <th>Contestant</th>
-                <th>Score</th>
-                <th>Overall P99</th>
-                <th>Success Rate</th>
-                <th>Breaking Point</th>
-                <th>Details</th>
-            </tr>
-        </thead>
-        <tbody id="leaderboard-body"></tbody>
-    </table>
+                <td>${w.label || 'Wave ' + w.wave_num}</td>
+                <td class="${colorClass(w.p50_ms)}">${w.p50_ms||0}ms</td>
+                <td class="${colorClass(w.p90_ms)}">${w.p90_ms||0}ms</td>
+                <td class="${colorClass(w.p99_ms)}">${w.p99_ms||0}ms</td>
+                <td class="${(w.success_rate||0)>=99?'good':(w.success_rate||0)>=95?'warn':'bad'}">${(w.success_rate||0).toFixed(1)}%</td>
+                <td class="${(w.correctness||0)>=99?'good':(w.correctness||0)>=95?'warn':'bad'}">${(w.correctness||0).toFixed(1)}%</td>
+                <td class="${(w.score||0)>30?'good':(w.score||0)>10?'warn':'bad'}">${(w.score||0).toFixed(2)}</td>
+            </tr>`).join('');
+        const waveTable = c.waves?.length ? `
+            <table class="wave-table">
+                <thead><tr><th>Wave</th><th>P50</th><th>P90</th><th>P99</th><th>Success</th><th>Correct</th><th>Score</th></tr></thead>
+                <tbody>${waveRows}</tbody>
+            </table>` : '';
+        const card = document.createElement('div');
+        card.className = `contestant-card ${rankClass}`;
+        card.innerHTML = `
+            <div class="card-header">
+                <div class="card-rank">#${index+1}</div>
+                <div class="card-name">${c.contestant_id}</div>
+                <div class="card-score ${scoreColorClass(sc)}">${sc.toFixed(2)}</div>
+            </div>
+            <div class="score-bar-bg"><div class="score-bar" style="width:${scoreBarWidth}%;background:${scoreBarColor(sc)}"></div></div>
+            <div class="card-metrics">
+                <div class="metric"><div class="metric-value ${colorClass(c.overall_p99)}">${(c.overall_p99||0).toFixed(0)}ms</div><div class="metric-label">Overall P99</div></div>
+                <div class="metric"><div class="metric-value ${(c.overall_success_rate||0)>=99?'good':'warn'}">${(c.overall_success_rate||0).toFixed(1)}%</div><div class="metric-label">Success Rate</div></div>
+                <div class="metric"><div class="metric-value good">${(c.waves?.length||0)*160}</div><div class="metric-label">Orders Tested</div></div>
+            </div>
+            ${getBreakingBadge(c.waves)}
+            <div class="chart-container"><canvas id="${chartId}"></canvas></div>
+            <button class="expand-btn" onclick="toggleWaves(${index})">▼ full breakdown</button>
+            <div class="wave-details" id="waves-${index}">
+                ${waveTable}
+                ${renderHistogram(c.waves)}
+            </div>`;
+        grid.appendChild(card);
+    });
+    data.forEach((c, index) => renderWaveChart(`chart-${index}`, c.waves));
+    expandedRows.forEach(index => {
+        const el = document.getElementById(`waves-${index}`);
+        if (el) el.style.display = 'block';
+    });
+};
 
-    <script>
-        const ws = new WebSocket('ws://localhost:8081/ws');
-        const tbody = document.getElementById('leaderboard-body');
-        const statusEl = document.getElementById('status');
-        const expandedRows = new Set();
-
-        ws.onopen = () => {
-            statusEl.textContent = '✓ Connected — live updates every second';
-            statusEl.className = 'status connected';
-        };
-
-        ws.onclose = () => {
-            statusEl.textContent = '✗ Disconnected';
-            statusEl.className = 'status disconnected';
-        };
-
-        function colorByValue(val, goodThreshold, warnThreshold) {
-            if (val >= goodThreshold) return 'good';
-            if (val >= warnThreshold) return 'warn';
-            return 'bad';
-        }
-
-        function colorByLatency(ms) {
-            if (ms <= 50) return 'good';
-            if (ms <= 200) return 'warn';
-            return 'bad';
-        }
-
-        function getBreakingPointBadge(waves) {
-            if (!waves || waves.length === 0) return '<span class="breaking-badge badge-stable">✓ stable</span>';
-            const worstP99 = Math.max(...waves.map(w => w.p99_ms || 0));
-            if (worstP99 >= 200) return '<span class="breaking-badge badge-bad">✗ breaks under load</span>';
-            if (worstP99 >= 50) return '<span class="breaking-badge badge-warn">⚠ degrades under load</span>';
-            return '<span class="breaking-badge badge-stable">✓ stable</span>';
-        }
-
-        function renderHistogram(waves) {
-            if (!waves || waves.length === 0) return '';
-            
-            const buckets = [
-                { label: '0-10ms',    min: 0,   max: 10 },
-                { label: '10-50ms',   min: 10,  max: 50 },
-                { label: '50-100ms',  min: 50,  max: 100 },
-                { label: '100-250ms', min: 100, max: 250 },
-                { label: '250ms+',    min: 250, max: Infinity },
-            ];
-
-            // use wave p99 values to approximate distribution
-            const p99s = waves.map(w => w.p99_ms || 0);
-            const maxP99 = Math.max(...p99s);
-
-            const rows = buckets.map(b => {
-                const count = p99s.filter(v => v > b.min && v <= b.max).length;
-                const pct = (count / p99s.length) * 100;
-                const barWidth = maxP99 > 0 ? Math.min(100, (b.max === Infinity ? (maxP99 > 250 ? 100 : 0) : (b.max / maxP99) * 60)) : 0;
-                return `
-                    <div class="hist-row">
-                        <span class="hist-label">${b.label}</span>
-                        <div class="hist-bar-bg">
-                            <div class="hist-bar" style="width:${pct * 2}%"></div>
-                        </div>
-                        <span class="hist-count">${count} waves</span>
-                    </div>
-                `;
-            }).join('');
-
-            return `<div class="section-title">P99 Distribution</div><div class="histogram">${rows}</div>`;
-        }
-
-        ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            if (!data || data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8b949e">No contestants yet</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = '';
-            data.forEach((c, index) => {
-                const rankClass = index < 3 ? `rank-${index+1}` : '';
-                const scoreColor = c.overall_score > 50 ? 'good' : c.overall_score > 20 ? 'warn' : 'bad';
-                const p99Color = colorByLatency(c.overall_p99);
-                const srColor = colorByValue(c.overall_success_rate, 99, 95);
-
-                const waveRows = (c.waves || []).map(w => `
-                    <tr>
-                        <td>${w.label || 'Wave ' + w.wave_num}</td>
-                        <td class="${colorByLatency(w.p50_ms)}">${w.p50_ms || 0}ms</td>
-                        <td class="${colorByLatency(w.p90_ms)}">${w.p90_ms || 0}ms</td>
-                        <td class="${colorByLatency(w.p99_ms)}">${w.p99_ms || 0}ms</td>
-                        <td class="${colorByValue(w.success_rate, 99, 95)}">${w.success_rate?.toFixed(1)}%</td>
-                        <td class="${colorByValue(w.correctness, 99, 95)}">${w.correctness?.toFixed(1)}%</td>
-                        <td>${w.tps?.toFixed(0)}</td>
-                        <td class="score ${w.score > 30 ? 'good' : w.score > 10 ? 'warn' : 'bad'}">${w.score?.toFixed(2)}</td>
-                    </tr>
-                `).join('');
-
-                const waveTable = c.waves?.length > 0 ? `
-                    <div class="section-title">Wave Breakdown</div>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Wave</th>
-                                <th>P50</th>
-                                <th>P90</th>
-                                <th>P99</th>
-                                <th>Success</th>
-                                <th>Correct</th>
-                                <th>TPS</th>
-                                <th>Score</th>
-                            </tr>
-                        </thead>
-                        <tbody>${waveRows}</tbody>
-                    </table>
-                ` : '';
-
-                const histogram = renderHistogram(c.waves);
-
-                tbody.innerHTML += `
-                    <tr class="${rankClass}">
-                        <td>${index + 1}</td>
-                        <td>${c.contestant_id}</td>
-                        <td class="score ${scoreColor}">${c.overall_score?.toFixed(2)}</td>
-                        <td class="${p99Color}">${c.overall_p99?.toFixed(0)}ms</td>
-                        <td class="${srColor}">${c.overall_success_rate?.toFixed(1)}%</td>
-                        <td>${getBreakingPointBadge(c.waves)}</td>
-                        <td>
-                            <button class="expand-btn" onclick="toggleWaves(${index})">▼ details</button>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td colspan="7" style="padding:0">
-                            <div class="wave-details" id="waves-${index}">
-                                ${waveTable}
-                                ${histogram}
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            });
-
-            // restore expanded state after re-render
-            expandedRows.forEach(index => {
-                const el = document.getElementById(`waves-${index}`);
-                if (el) el.style.display = 'block';
-            });
-        };
-
-        function toggleWaves(index) {
-            if (expandedRows.has(index)) {
-                expandedRows.delete(index);
-            } else {
-                expandedRows.add(index);
-            }
-            const el = document.getElementById(`waves-${index}`);
-            if (el) el.style.display = expandedRows.has(index) ? 'block' : 'none';
-        }
-    </script>
+function toggleWaves(index) {
+    if (expandedRows.has(index)) { expandedRows.delete(index); } else { expandedRows.add(index); }
+    const el = document.getElementById(`waves-${index}`);
+    if (el) el.style.display = expandedRows.has(index) ? 'block' : 'none';
+}
+</script>
 </body>
 </html>
