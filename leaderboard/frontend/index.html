@@ -56,43 +56,44 @@
         const ws = new WebSocket('ws://localhost:8081/ws');
         const tbody = document.getElementById('leaderboard-body');
         const statusEl = document.getElementById('status');
-
+        const expandedRows = new Set();
+    
         ws.onopen = () => {
             statusEl.textContent = '✓ Connected — live updates every second';
             statusEl.className = 'status connected';
         };
-
+    
         ws.onclose = () => {
             statusEl.textContent = '✗ Disconnected';
             statusEl.className = 'status disconnected';
         };
-
+    
         function colorByValue(val, goodThreshold, warnThreshold) {
             if (val >= goodThreshold) return 'good';
             if (val >= warnThreshold) return 'warn';
             return 'bad';
         }
-
+    
         function colorByLatency(ms) {
             if (ms <= 50) return 'good';
             if (ms <= 200) return 'warn';
             return 'bad';
         }
-
+    
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
             if (!data || data.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#8b949e">No contestants yet</td></tr>';
                 return;
             }
-
+    
             tbody.innerHTML = '';
             data.forEach((c, index) => {
                 const rankClass = index < 3 ? `rank-${index+1}` : '';
                 const scoreColor = c.overall_score > 50 ? 'good' : c.overall_score > 20 ? 'warn' : 'bad';
                 const p99Color = colorByLatency(c.overall_p99);
                 const srColor = colorByValue(c.overall_success_rate, 99, 95);
-
+    
                 const waveRows = (c.waves || []).map(w => `
                     <tr>
                         <td>Wave ${w.wave_num} ${w.label}</td>
@@ -102,7 +103,7 @@
                         <td>${w.score?.toFixed(2)}</td>
                     </tr>
                 `).join('');
-
+    
                 const waveTable = c.waves?.length > 0 ? `
                     <div class="wave-details" id="waves-${index}">
                         <table>
@@ -111,7 +112,7 @@
                         </table>
                     </div>
                 ` : '';
-
+    
                 tbody.innerHTML += `
                     <tr class="${rankClass}">
                         <td>${index + 1}</td>
@@ -126,11 +127,22 @@
                     <tr><td colspan="6" style="padding:0">${waveTable}</td></tr>
                 `;
             });
+    
+            // restore expanded state after re-render
+            expandedRows.forEach(index => {
+                const el = document.getElementById(`waves-${index}`);
+                if (el) el.style.display = 'block';
+            });
         };
-
+    
         function toggleWaves(index) {
+            if (expandedRows.has(index)) {
+                expandedRows.delete(index);
+            } else {
+                expandedRows.add(index);
+            }
             const el = document.getElementById(`waves-${index}`);
-            if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+            if (el) el.style.display = expandedRows.has(index) ? 'block' : 'none';
         }
     </script>
 </body>
