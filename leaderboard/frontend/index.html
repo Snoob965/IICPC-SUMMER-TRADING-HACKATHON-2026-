@@ -21,16 +21,27 @@
         .rank-1 td:first-child { color: #ffd700; font-weight: bold; }
         .rank-2 td:first-child { color: #c0c0c0; font-weight: bold; }
         .rank-3 td:first-child { color: #cd7f32; font-weight: bold; }
-        .score { color: #3fb950; font-weight: bold; }
+        .score { font-weight: bold; }
         .good { color: #3fb950; }
         .warn { color: #d29922; }
         .bad  { color: #f85149; }
-        .wave-details { display: none; background: #161b22; padding: 12px; margin-top: 4px; border-radius: 4px; font-size: 0.8rem; }
-        .wave-details table { margin: 0; }
-        .wave-details th { font-size: 0.75rem; }
-        .wave-details td { font-size: 0.8rem; padding: 6px 12px; }
-        .expand-btn { cursor: pointer; color: #58a6ff; font-size: 0.8rem; background: none; border: none; color: #58a6ff; }
-        .expand-btn:hover { text-decoration: underline; }
+        .wave-details { display: none; background: #0d1117; padding: 16px; border: 1px solid #30363d; border-radius: 4px; }
+        .wave-details table { margin: 0 0 16px 0; }
+        .wave-details th { font-size: 0.75rem; background: #0d1117; }
+        .wave-details td { font-size: 0.8rem; padding: 8px 12px; }
+        .expand-btn { cursor: pointer; background: none; border: 1px solid #30363d; color: #58a6ff; padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; }
+        .expand-btn:hover { background: #161b22; }
+        .breaking-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
+        .badge-stable { background: #1a4a2a; color: #3fb950; }
+        .badge-warn { background: #3a2e0a; color: #d29922; }
+        .badge-bad { background: #3a1a1a; color: #f85149; }
+        .histogram { margin-top: 8px; }
+        .hist-row { display: flex; align-items: center; margin: 3px 0; font-size: 0.75rem; }
+        .hist-label { width: 80px; color: #8b949e; }
+        .hist-bar-bg { flex: 1; background: #21262d; border-radius: 2px; height: 14px; margin: 0 8px; }
+        .hist-bar { height: 100%; border-radius: 2px; background: #58a6ff; transition: width 0.3s; }
+        .hist-count { width: 80px; color: #8b949e; text-align: right; }
+        .section-title { color: #58a6ff; font-size: 0.75rem; text-transform: uppercase; margin: 12px 0 6px 0; letter-spacing: 1px; }
     </style>
 </head>
 <body>
@@ -46,6 +57,7 @@
                 <th>Score</th>
                 <th>Overall P99</th>
                 <th>Success Rate</th>
+                <th>Breaking Point</th>
                 <th>Details</th>
             </tr>
         </thead>
@@ -57,62 +69,118 @@
         const tbody = document.getElementById('leaderboard-body');
         const statusEl = document.getElementById('status');
         const expandedRows = new Set();
-    
+
         ws.onopen = () => {
             statusEl.textContent = '✓ Connected — live updates every second';
             statusEl.className = 'status connected';
         };
-    
+
         ws.onclose = () => {
             statusEl.textContent = '✗ Disconnected';
             statusEl.className = 'status disconnected';
         };
-    
+
         function colorByValue(val, goodThreshold, warnThreshold) {
             if (val >= goodThreshold) return 'good';
             if (val >= warnThreshold) return 'warn';
             return 'bad';
         }
-    
+
         function colorByLatency(ms) {
             if (ms <= 50) return 'good';
             if (ms <= 200) return 'warn';
             return 'bad';
         }
-    
+
+        function getBreakingPointBadge(waves) {
+            if (!waves || waves.length === 0) return '<span class="breaking-badge badge-stable">✓ stable</span>';
+            const worstP99 = Math.max(...waves.map(w => w.p99_ms || 0));
+            if (worstP99 >= 200) return '<span class="breaking-badge badge-bad">✗ breaks under load</span>';
+            if (worstP99 >= 50) return '<span class="breaking-badge badge-warn">⚠ degrades under load</span>';
+            return '<span class="breaking-badge badge-stable">✓ stable</span>';
+        }
+
+        function renderHistogram(waves) {
+            if (!waves || waves.length === 0) return '';
+            
+            const buckets = [
+                { label: '0-10ms',    min: 0,   max: 10 },
+                { label: '10-50ms',   min: 10,  max: 50 },
+                { label: '50-100ms',  min: 50,  max: 100 },
+                { label: '100-250ms', min: 100, max: 250 },
+                { label: '250ms+',    min: 250, max: Infinity },
+            ];
+
+            // use wave p99 values to approximate distribution
+            const p99s = waves.map(w => w.p99_ms || 0);
+            const maxP99 = Math.max(...p99s);
+
+            const rows = buckets.map(b => {
+                const count = p99s.filter(v => v > b.min && v <= b.max).length;
+                const pct = (count / p99s.length) * 100;
+                const barWidth = maxP99 > 0 ? Math.min(100, (b.max === Infinity ? (maxP99 > 250 ? 100 : 0) : (b.max / maxP99) * 60)) : 0;
+                return `
+                    <div class="hist-row">
+                        <span class="hist-label">${b.label}</span>
+                        <div class="hist-bar-bg">
+                            <div class="hist-bar" style="width:${pct * 2}%"></div>
+                        </div>
+                        <span class="hist-count">${count} waves</span>
+                    </div>
+                `;
+            }).join('');
+
+            return `<div class="section-title">P99 Distribution</div><div class="histogram">${rows}</div>`;
+        }
+
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
             if (!data || data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#8b949e">No contestants yet</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8b949e">No contestants yet</td></tr>';
                 return;
             }
-    
+
             tbody.innerHTML = '';
             data.forEach((c, index) => {
                 const rankClass = index < 3 ? `rank-${index+1}` : '';
                 const scoreColor = c.overall_score > 50 ? 'good' : c.overall_score > 20 ? 'warn' : 'bad';
                 const p99Color = colorByLatency(c.overall_p99);
                 const srColor = colorByValue(c.overall_success_rate, 99, 95);
-    
+
                 const waveRows = (c.waves || []).map(w => `
                     <tr>
-                        <td>Wave ${w.wave_num} ${w.label}</td>
-                        <td class="${colorByLatency(w.p99_ms)}">${w.p99_ms}ms</td>
+                        <td>${w.label || 'Wave ' + w.wave_num}</td>
+                        <td class="${colorByLatency(w.p50_ms)}">${w.p50_ms || 0}ms</td>
+                        <td class="${colorByLatency(w.p90_ms)}">${w.p90_ms || 0}ms</td>
+                        <td class="${colorByLatency(w.p99_ms)}">${w.p99_ms || 0}ms</td>
                         <td class="${colorByValue(w.success_rate, 99, 95)}">${w.success_rate?.toFixed(1)}%</td>
                         <td class="${colorByValue(w.correctness, 99, 95)}">${w.correctness?.toFixed(1)}%</td>
-                        <td>${w.score?.toFixed(2)}</td>
+                        <td>${w.tps?.toFixed(0)}</td>
+                        <td class="score ${w.score > 30 ? 'good' : w.score > 10 ? 'warn' : 'bad'}">${w.score?.toFixed(2)}</td>
                     </tr>
                 `).join('');
-    
+
                 const waveTable = c.waves?.length > 0 ? `
-                    <div class="wave-details" id="waves-${index}">
-                        <table>
-                            <thead><tr><th>Wave</th><th>P99</th><th>Success</th><th>Correct</th><th>Score</th></tr></thead>
-                            <tbody>${waveRows}</tbody>
-                        </table>
-                    </div>
+                    <div class="section-title">Wave Breakdown</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Wave</th>
+                                <th>P50</th>
+                                <th>P90</th>
+                                <th>P99</th>
+                                <th>Success</th>
+                                <th>Correct</th>
+                                <th>TPS</th>
+                                <th>Score</th>
+                            </tr>
+                        </thead>
+                        <tbody>${waveRows}</tbody>
+                    </table>
                 ` : '';
-    
+
+                const histogram = renderHistogram(c.waves);
+
                 tbody.innerHTML += `
                     <tr class="${rankClass}">
                         <td>${index + 1}</td>
@@ -120,21 +188,29 @@
                         <td class="score ${scoreColor}">${c.overall_score?.toFixed(2)}</td>
                         <td class="${p99Color}">${c.overall_p99?.toFixed(0)}ms</td>
                         <td class="${srColor}">${c.overall_success_rate?.toFixed(1)}%</td>
+                        <td>${getBreakingPointBadge(c.waves)}</td>
                         <td>
-                            <button class="expand-btn" onclick="toggleWaves(${index})">▼ waves</button>
+                            <button class="expand-btn" onclick="toggleWaves(${index})">▼ details</button>
                         </td>
                     </tr>
-                    <tr><td colspan="6" style="padding:0">${waveTable}</td></tr>
+                    <tr>
+                        <td colspan="7" style="padding:0">
+                            <div class="wave-details" id="waves-${index}">
+                                ${waveTable}
+                                ${histogram}
+                            </div>
+                        </td>
+                    </tr>
                 `;
             });
-    
+
             // restore expanded state after re-render
             expandedRows.forEach(index => {
                 const el = document.getElementById(`waves-${index}`);
                 if (el) el.style.display = 'block';
             });
         };
-    
+
         function toggleWaves(index) {
             if (expandedRows.has(index)) {
                 expandedRows.delete(index);
