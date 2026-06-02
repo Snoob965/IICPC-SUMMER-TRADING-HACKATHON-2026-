@@ -338,13 +338,14 @@ func main() {
 		2: "Market Orders",
 		3: "Cancel Orders",
 		4: "Mixed Sustained",
+		5: "Chaos Testing",
 	}
 
 	var waves []WaveScore
 	var allLatencies []float64
 	totalSuccess, totalCount := 0, 0
 
-	for i := 1; i <= 4; i++ {
+	for i := 1; i <= 5; i++ {
 		checkSampleSize(waveMap[i], i)
 		ws := scoreWave(waveMap[i], i, waveLabels[i])
 		waves = append(waves, ws)
