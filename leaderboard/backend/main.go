@@ -79,7 +79,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request, rdb *redis.Client
 		} else {
 			ws.WriteJSON(data)
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(3 * time.Second)
 	}
 }
 
