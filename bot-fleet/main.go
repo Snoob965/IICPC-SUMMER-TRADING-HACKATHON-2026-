@@ -19,7 +19,6 @@ import (
 
 var ctx = context.Background()
 
-// Test modes — chess.com style
 var TestModes = map[string]time.Duration{
 	"blitz":    40 * time.Second,
 	"standard": 90 * time.Second,
@@ -60,8 +59,6 @@ type WaveResult struct {
 func makeOrder(botID int, orderType string, instrument string) Order {
 	sides := []string{"buy", "sell"}
 	side := sides[rand.Intn(2)]
-
-	// base price per instrument
 	basePrice := 1820.0
 	if instrument == "BTC" {
 		basePrice = 95000.0
@@ -76,13 +73,12 @@ func makeOrder(botID int, orderType string, instrument string) Order {
 	case "cancel":
 		return Order{BotID: botID, Type: "cancel", Side: side, Quantity: 1}
 	case "chaos":
-		// chaos orders — edge cases
 		chaosTypes := []Order{
-			{BotID: botID, Type: "limit", Side: "buy", Price: 0, Quantity: 1},            // zero price
-			{BotID: botID, Type: "limit", Side: "sell", Price: 999999999, Quantity: 1},   // extreme price
-			{BotID: botID, Type: "limit", Side: "buy", Price: price, Quantity: 0},        // zero quantity
-			{BotID: botID, Type: "cancel", Side: "buy", Quantity: 1},                     // cancel nonexistent
-			{BotID: botID, Type: "market", Side: side, Quantity: 10000},                  // huge quantity
+			{BotID: botID, Type: "limit", Side: "buy", Price: 0, Quantity: 1},
+			{BotID: botID, Type: "limit", Side: "sell", Price: 999999999, Quantity: 1},
+			{BotID: botID, Type: "limit", Side: "buy", Price: price, Quantity: 0},
+			{BotID: botID, Type: "cancel", Side: "buy", Quantity: 1},
+			{BotID: botID, Type: "market", Side: side, Quantity: 10000},
 		}
 		return chaosTypes[rand.Intn(len(chaosTypes))]
 	default:
@@ -124,7 +120,7 @@ func validateCorrectness(targetURL string, order Order) bool {
 func validateDepth(targetURL string) bool {
 	resp, err := http.Get(targetURL + "/orderbook/depth")
 	if err != nil {
-		return true // endpoint optional
+		return false
 	}
 	defer resp.Body.Close()
 
@@ -133,15 +129,77 @@ func validateDepth(targetURL string) bool {
 
 	bids, hasBids := depth["bids"]
 	asks, hasAsks := depth["asks"]
-
 	if !hasBids || !hasAsks {
 		return false
 	}
 
 	bidsSlice, _ := bids.([]interface{})
 	asksSlice, _ := asks.([]interface{})
-
 	return len(bidsSlice) > 0 && len(asksSlice) > 0
+}
+
+func runPriceTimePriorityTest(targetURL string) bool {
+	fmt.Printf("\n[Price-Time Priority Test]\n")
+	fmt.Println("  Sending Bot A limit buy at 1820.00...")
+
+	orderA := Order{BotID: 9001, Type: "limit", Side: "buy", Price: 1820.00, Quantity: 5}
+	payloadA, _ := json.Marshal(orderA)
+	respA, err := http.Post(targetURL+"/order", "application/json", bytes.NewBuffer(payloadA))
+	if err != nil {
+		fmt.Println("  ✗ Bot A order failed:", err)
+		return false
+	}
+	defer respA.Body.Close()
+
+	var resultA map[string]interface{}
+	json.NewDecoder(respA.Body).Decode(&resultA)
+	orderIDA, _ := resultA["order_id"].(string)
+	fmt.Printf("  Bot A order accepted: %s\n", orderIDA)
+
+	time.Sleep(10 * time.Millisecond)
+
+	fmt.Println("  Sending Bot B limit buy at 1820.00 (same price, later time)...")
+	orderB := Order{BotID: 9002, Type: "limit", Side: "buy", Price: 1820.00, Quantity: 5}
+	payloadB, _ := json.Marshal(orderB)
+	respB, err := http.Post(targetURL+"/order", "application/json", bytes.NewBuffer(payloadB))
+	if err != nil {
+		fmt.Println("  ✗ Bot B order failed:", err)
+		return false
+	}
+	defer respB.Body.Close()
+
+	var resultB map[string]interface{}
+	json.NewDecoder(respB.Body).Decode(&resultB)
+	orderIDB, _ := resultB["order_id"].(string)
+	fmt.Printf("  Bot B order accepted: %s\n", orderIDB)
+
+	fmt.Println("  Sending market sell qty 5 — should fill Bot A first...")
+	orderSell := Order{BotID: 9003, Type: "market", Side: "sell", Quantity: 5}
+	payloadSell, _ := json.Marshal(orderSell)
+	respSell, err := http.Post(targetURL+"/order", "application/json", bytes.NewBuffer(payloadSell))
+	if err != nil {
+		fmt.Println("  ✗ Market sell failed:", err)
+		return false
+	}
+	defer respSell.Body.Close()
+
+	var resultSell map[string]interface{}
+	json.NewDecoder(respSell.Body).Decode(&resultSell)
+
+	filledID, hasFill := resultSell["filled_order_id"].(string)
+	if !hasFill {
+		fmt.Println("  ⚠ Engine does not report filled_order_id — cannot verify price-time priority")
+		fmt.Println("  ⚠ Add 'filled_order_id' to your /order response to enable this check")
+		return false
+	}
+
+	if filledID == orderIDA {
+		fmt.Println("  ✓ Price-time priority CORRECT — Bot A filled first")
+		return true
+	}
+
+	fmt.Printf("  ✗ Price-time priority VIOLATED — filled %s instead of %s\n", filledID, orderIDA)
+	return false
 }
 
 func runBot(botID int, targetURL string, contestantID string, orderType string, waveNum int, instrument string, wg *sync.WaitGroup, results chan<- Result) {
@@ -170,7 +228,6 @@ func spawnBots(targetURL string, contestantID string, numBots int, orderType str
 	var mu sync.Mutex
 	count := 0
 
-	// constant throughput — steady rate not all at once
 	requestsPerSecond := numBots / 5
 	if requestsPerSecond < 1 {
 		requestsPerSecond = 1
@@ -256,18 +313,7 @@ func runWave(waveNum int, label string, orderType string, targetURL string, cont
 	}
 
 	p50, p99, sr, cr := computeWaveStats(allResults)
-
-	return WaveResult{
-		WaveNum:   waveNum,
-		Label:     label,
-		OrderType: orderType,
-		BotCount:  maxBots,
-		Results:   allResults,
-		P50:       p50,
-		P99:       p99,
-		SR:        sr,
-		CR:        cr,
-	}
+	return WaveResult{WaveNum: waveNum, Label: label, OrderType: orderType, BotCount: maxBots, Results: allResults, P50: p50, P99: p99, SR: sr, CR: cr}
 }
 
 func runChaosWave(waveNum int, targetURL string, contestantID string, maxBots int, duration time.Duration) WaveResult {
@@ -280,17 +326,7 @@ func runChaosWave(waveNum int, targetURL string, contestantID string, maxBots in
 	fmt.Printf("  → p50=%.1fms p99=%.1fms success=%.1f%% correct=%.1f%%\n", p50, p99, sr, cr)
 	fmt.Printf("  Engine resilience: if success=100%% engine handled all edge cases gracefully\n")
 
-	return WaveResult{
-		WaveNum:   waveNum,
-		Label:     "Chaos",
-		OrderType: "chaos",
-		BotCount:  maxBots,
-		Results:   results,
-		P50:       p50,
-		P99:       p99,
-		SR:        sr,
-		CR:        cr,
-	}
+	return WaveResult{WaveNum: waveNum, Label: "Chaos", OrderType: "chaos", BotCount: maxBots, Results: results, P50: p50, P99: p99, SR: sr, CR: cr}
 }
 
 func pushToRedpanda(results []Result, topic string) {
@@ -362,7 +398,6 @@ func main() {
 		Use:   "bot-fleet",
 		Short: "Distributed bot fleet for stress testing trading engines",
 		Run: func(cmd *cobra.Command, args []string) {
-			// resolve duration from mode or explicit flag
 			var totalDuration time.Duration
 			if d, ok := TestModes[mode]; ok {
 				totalDuration = d
@@ -387,7 +422,15 @@ func main() {
 				fmt.Println("⚠ /orderbook/depth not found — depth scoring skipped")
 			}
 
-			// 5 waves + chaos + optional multi-instrument
+			// price-time priority test
+			fmt.Print("\nRunning price-time priority test... ")
+			ptpResult := runPriceTimePriorityTest(resolvedURL)
+			if ptpResult {
+				fmt.Println("✓ Price-time priority verified")
+			} else {
+				fmt.Println("⚠ Price-time priority could not be verified")
+			}
+
 			waveDuration := totalDuration / 6
 
 			fmt.Printf("\n=== STRESS TEST: %v | %d bots | %s | mode=%s ===\n", totalDuration, numBots, contestantID, mode)
@@ -407,7 +450,6 @@ func main() {
 			allResults = append(allResults, w4.Results...)
 			allResults = append(allResults, w5.Results...)
 
-			// optional multi-instrument wave
 			if multiInstrument {
 				w6 := runWave(6, "BTC Multi-Instrument", "mixed", resolvedURL, contestantID, numBots/2, waveDuration, "BTC")
 				allResults = append(allResults, w6.Results...)
@@ -426,9 +468,9 @@ func main() {
 	rootCmd.Flags().StringVarP(&targetURL, "target", "t", "http://localhost:8080", "Target URL fallback")
 	rootCmd.Flags().StringVarP(&contestantID, "contestant", "c", "contestant_001", "Contestant ID")
 	rootCmd.Flags().StringVarP(&topic, "topic", "p", "bot-results", "Redpanda topic")
-	rootCmd.Flags().StringVarP(&durationStr, "duration", "d", "60s", "Total test duration (overridden by --mode)")
-	rootCmd.Flags().StringVarP(&mode, "mode", "m", "standard", "Test mode: blitz (40s), standard (90s), marathon (180s)")
-	rootCmd.Flags().BoolVarP(&multiInstrument, "multi", "i", false, "Enable multi-instrument (ETH + BTC) testing")
+	rootCmd.Flags().StringVarP(&durationStr, "duration", "d", "60s", "Total test duration")
+	rootCmd.Flags().StringVarP(&mode, "mode", "m", "standard", "Test mode: blitz, standard, marathon")
+	rootCmd.Flags().BoolVarP(&multiInstrument, "multi", "i", false, "Enable multi-instrument BTC+ETH testing")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

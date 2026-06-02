@@ -31,6 +31,7 @@ type WaveScore struct {
 	P50         float64 `json:"p50_ms"`
 	P90         float64 `json:"p90_ms"`
 	P99         float64 `json:"p99_ms"`
+	P999        float64 `json:"p999_ms"`
 	SuccessRate float64 `json:"success_rate"`
 	Correctness float64 `json:"correctness"`
 	TPS         float64 `json:"tps"`
@@ -42,6 +43,7 @@ type FinalScore struct {
 	Waves        []WaveScore `json:"waves"`
 	OverallScore float64     `json:"overall_score"`
 	OverallP99   float64     `json:"overall_p99"`
+	OverallP999  float64     `json:"overall_p999"`
 	OverallSR    float64     `json:"overall_success_rate"`
 }
 
@@ -92,10 +94,7 @@ func checkSampleSize(results []Result, waveNum int) {
 }
 
 func scoreWave(results []Result, waveNum int, label string) WaveScore {
-	// HDR Histogram — O(1) per recording, ~40KB memory, no sorting needed
-	// range: 1 microsecond to 1 minute, 3 significant digits
 	hist := hdrhistogram.New(1, 60000, 3)
-
 	success, correct, total := 0, 0, 0
 
 	for _, r := range results {
@@ -116,10 +115,11 @@ func scoreWave(results []Result, waveNum int, label string) WaveScore {
 	p50 := float64(hist.ValueAtQuantile(50))
 	p90 := float64(hist.ValueAtQuantile(90))
 	p99 := float64(hist.ValueAtQuantile(99))
+	p999 := float64(hist.ValueAtQuantile(99.9))
 	successRate := float64(success) / float64(total) * 100
 	correctness := float64(correct) / float64(total) * 100
 	tps := float64(total) / 15.0
-	score := (1000.0 / (p99 + 1)) * (successRate / 100.0) * (correctness / 100.0)
+	score := (1000.0 / (p99 + 1)) * (1000.0 / (p999 + 1)) * (successRate / 100.0) * (correctness / 100.0)
 
 	return WaveScore{
 		WaveNum:     waveNum,
@@ -127,6 +127,7 @@ func scoreWave(results []Result, waveNum int, label string) WaveScore {
 		P50:         p50,
 		P90:         p90,
 		P99:         p99,
+		P999:        p999,
 		SuccessRate: successRate,
 		Correctness: correctness,
 		TPS:         tps,
@@ -174,11 +175,12 @@ func detectBreakingPoint(waveMap map[int][]Result, maxBots int) {
 		2: "Market Orders",
 		3: "Cancel Orders",
 		4: "Mixed",
+		5: "Chaos Testing",
 	}
 
 	fmt.Printf("\n--- Breaking Point Analysis ---\n")
 
-	for waveNum := 1; waveNum <= 4; waveNum++ {
+	for waveNum := 1; waveNum <= 5; waveNum++ {
 		steps := getStepStats(waveMap[waveNum], maxBots)
 		if steps == nil {
 			continue
@@ -305,13 +307,14 @@ func printFinalScore(final FinalScore) {
 			status = "✗"
 		}
 		fmt.Printf("\nWave %d %-20s %s\n", w.WaveNum, label, status)
-		fmt.Printf("  P50: %.0fms  P90: %.0fms  P99: %.0fms\n", w.P50, w.P90, w.P99)
+		fmt.Printf("  P50: %.0fms  P90: %.0fms  P99: %.0fms  P99.9: %.0fms\n", w.P50, w.P90, w.P99, w.P999)
 		fmt.Printf("  Success: %.1f%%  Correct: %.1f%%  TPS: %.1f\n", w.SuccessRate, w.Correctness, w.TPS)
 		fmt.Printf("  Wave Score: %.4f\n", w.Score)
 	}
 
 	fmt.Printf("\n──────────────────────────────────────────────\n")
 	fmt.Printf("Overall P99:     %.0fms\n", final.OverallP99)
+	fmt.Printf("Overall P99.9:   %.0fms\n", final.OverallP999)
 	fmt.Printf("Overall Success: %.1f%%\n", final.OverallSR)
 	fmt.Printf("FINAL SCORE:     %.4f\n", final.OverallScore)
 	fmt.Printf("──────────────────────────────────────────────\n")
@@ -361,6 +364,7 @@ func main() {
 
 	sort.Float64s(allLatencies)
 	overallP99 := percentile(allLatencies, 99)
+	overallP999 := percentile(allLatencies, 99.9)
 	overallSR := float64(totalSuccess) / float64(totalCount) * 100
 
 	overallScore := 0.0
@@ -374,6 +378,7 @@ func main() {
 		Waves:        waves,
 		OverallScore: overallScore,
 		OverallP99:   overallP99,
+		OverallP999:  overallP999,
 		OverallSR:    overallSR,
 	}
 
