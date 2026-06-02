@@ -287,6 +287,7 @@ func printFinalScore(final FinalScore) {
 		2: "Market Orders",
 		3: "Cancel Orders",
 		4: "Mixed Sustained",
+		5: "Chaos Testing",
 	}
 
 	fmt.Printf("\n╔══════════════════════════════════════════════╗\n")
