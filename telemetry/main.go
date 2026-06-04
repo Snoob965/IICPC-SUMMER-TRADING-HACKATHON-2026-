@@ -119,7 +119,9 @@ func scoreWave(results []Result, waveNum int, label string) WaveScore {
 	successRate := float64(success) / float64(total) * 100
 	correctness := float64(correct) / float64(total) * 100
 	tps := float64(total) / 15.0
-	score := (1000.0 / (p99 + 1)) * (1000.0 / (p999 + 1)) * (successRate / 100.0) * (correctness / 100.0)
+        p99Factor := 1000.0 / (float64(p99) + 1.0)
+        p999Factor := 1000.0 / (float64(p999) + 1.0)
+        score := p99Factor * p999Factor * successRate * correctness
 
 	return WaveScore{
 		WaveNum:     waveNum,
