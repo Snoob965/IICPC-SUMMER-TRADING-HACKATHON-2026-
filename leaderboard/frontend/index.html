@@ -107,10 +107,11 @@ const chartInstances = {};
 let historyChart = null;
 let countdown = 1;
 
+let countdownVal = 3;
 setInterval(() => {
     if (statusEl.className.includes('connected')) {
-        countdownEl.textContent = `updating in ${countdown}s`;
-        countdown = countdown <= 1 ? 1 : countdown - 1;
+        countdownEl.textContent = `updating in ${countdownVal}s`;
+        countdownVal = countdownVal <= 1 ? 3 : countdownVal - 1;
     }
 }, 1000);
 
