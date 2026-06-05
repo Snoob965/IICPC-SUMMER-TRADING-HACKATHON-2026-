@@ -375,52 +375,6 @@ func printFinalReport(waves []WaveResult, totalDuration time.Duration, mode stri
 }
 
 // runPriceTimePriorityTest fires a choreographed sequence to test matching fairness
-func runPriceTimePriorityTest(targetURL string) {
-	fmt.Println("\n╔════════════════════════════════════════════════════╗")
-	fmt.Println("║      RUNNING PRICE-TIME PRIORITY VERIFICATION      ║")
-	fmt.Println("╚════════════════════════════════════════════════════╝")
-
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	// Helper function to fire a specific order
-	fireOrder := func(botName, side string, price, qty int) {
-		payload := fmt.Sprintf(`{"bot_id": "%s", "side": "%s", "price": %d, "qty": %d}`, botName, side, price, qty)
-		req, _ := http.NewRequest("POST", targetURL+"/order", bytes.NewBuffer([]byte(payload)))
-		req.Header.Set("Content-Type", "application/json")
-
-		start := time.Now()
-		resp, err := client.Do(req)
-		elapsed := time.Since(start)
-
-		if err != nil {
-			fmt.Printf("[❌] %s request failed: %v\n", botName, err)
-			return
-		}
-		defer resp.Body.Close()
-
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Printf("[➤] %s (%s %d @ $%d) -> Latency: %v | Engine Reply: %s\n",
-			botName, side, qty, price, elapsed, string(body))
-	}
-
-	fmt.Println("\n[SEQUENCE START]")
-
-	// 1. Bot A arrives first
-	fireOrder("Bot_A", "LIMIT_BUY", 1820, 5)
-	time.Sleep(50 * time.Millisecond) // Force a microscopic delay
-
-	// 2. Bot B arrives second
-	fireOrder("Bot_B", "LIMIT_BUY", 1820, 5)
-	time.Sleep(50 * time.Millisecond)
-
-	// 3. Market Sell arrives to fill exactly 5 shares
-	fireOrder("Market_Sell", "MARKET_SELL", 1820, 5)
-
-	fmt.Println("\n[EXPECTED OUTCOME]")
-	fmt.Println("If the engine is correct, Bot_A should receive the FILL.")
-	fmt.Println("Bot_B should remain in the order book unfilled.")
-	fmt.Println("------------------------------------------------------\n")
-}
 
 func getTargetURL(rdb *redis.Client, contestantID string, fallback string) string {
 	port, err := rdb.Get(ctx, fmt.Sprintf("sandbox:%s:port", contestantID)).Result()
