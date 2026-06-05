@@ -15,9 +15,11 @@ type PriceLevel struct {
 }
 
 type OrderBook struct {
-	mu   sync.Mutex
-	bids map[float64]int
-	asks map[float64]int
+	mu          sync.Mutex
+	bids        map[float64]int
+	asks        map[float64]int
+	firstBotID  interface{}
+	firstOrderID string
 }
 
 var book = &OrderBook{
@@ -82,29 +84,48 @@ func orderHandler(w http.ResponseWriter, r *http.Request) {
 	var order map[string]interface{}
 	json.NewDecoder(r.Body).Decode(&order)
 
-	book.mu.Lock()
 	orderType, _ := order["type"].(string)
 	side, _ := order["side"].(string)
 	price, _ := order["price"].(float64)
+	botID := order["bot_id"]
 	qty := 1
 
+	orderID := fmt.Sprintf("ord_%v_%d", botID, rand.Intn(10000))
+
+	book.mu.Lock()
 	if orderType == "limit" && price > 0 {
 		if side == "buy" {
 			book.bids[price] += qty
+			// track first order at best bid for price-time priority
+			if book.firstBotID == nil {
+				book.firstBotID = botID
+				book.firstOrderID = orderID
+			}
 		} else {
 			book.asks[price] += qty
 		}
 	}
+
+	// simulate fill reporting for market orders
+	filledOrderID := ""
+	if orderType == "market" && side == "sell" && book.firstOrderID != "" {
+		// price-time priority: fill the first order that arrived
+		filledOrderID = book.firstOrderID
+		book.firstBotID = nil
+		book.firstOrderID = ""
+	}
 	book.mu.Unlock()
 
-	// add some random latency to simulate real engine
-	// time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
+	response := map[string]interface{}{
+		"status":   "accepted",
+		"order_id": orderID,
+	}
+	if filledOrderID != "" {
+		response["filled_order_id"] = filledOrderID
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":   "accepted",
-		"order_id": fmt.Sprintf("ord_%v_%d", order["bot_id"], rand.Intn(10000)),
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
 func main() {
