@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"time"
 
@@ -17,12 +20,15 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+var rdb *redis.Client
+
 type WaveScore struct {
 	WaveNum     int     `json:"wave_num"`
 	Label       string  `json:"label"`
 	P50         float64 `json:"p50_ms"`
 	P90         float64 `json:"p90_ms"`
 	P99         float64 `json:"p99_ms"`
+	P999        float64 `json:"p999_ms"`
 	SuccessRate float64 `json:"success_rate"`
 	Correctness float64 `json:"correctness"`
 	TPS         float64 `json:"tps"`
@@ -33,12 +39,13 @@ type ContestantEntry struct {
 	ContestantID string      `json:"contestant_id"`
 	OverallScore float64     `json:"overall_score"`
 	OverallP99   float64     `json:"overall_p99"`
+	OverallP999  float64     `json:"overall_p999"`
 	OverallSR    float64     `json:"overall_success_rate"`
 	Waves        []WaveScore `json:"waves"`
 	Rank         int         `json:"rank"`
 }
 
-func getLeaderboardData(rdb *redis.Client) ([]ContestantEntry, error) {
+func getLeaderboardData() ([]ContestantEntry, error) {
 	contestants, err := rdb.ZRevRangeWithScores(ctx, "leaderboard:ranking", 0, -1).Result()
 	if err != nil {
 		return nil, err
@@ -51,7 +58,6 @@ func getLeaderboardData(rdb *redis.Client) ([]ContestantEntry, error) {
 		if err != nil {
 			continue
 		}
-
 		var entry ContestantEntry
 		json.Unmarshal([]byte(dataStr), &entry)
 		entry.ContestantID = contestantID
@@ -62,7 +68,7 @@ func getLeaderboardData(rdb *redis.Client) ([]ContestantEntry, error) {
 	return leaderboard, nil
 }
 
-func handleConnections(w http.ResponseWriter, r *http.Request, rdb *redis.Client) {
+func handleConnections(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("WebSocket upgrade error:", err)
@@ -73,7 +79,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request, rdb *redis.Client
 	fmt.Println("Client connected to leaderboard")
 
 	for {
-		data, err := getLeaderboardData(rdb)
+		data, err := getLeaderboardData()
 		if err != nil {
 			log.Println("Redis error:", err)
 		} else {
@@ -83,8 +89,8 @@ func handleConnections(w http.ResponseWriter, r *http.Request, rdb *redis.Client
 	}
 }
 
-func handleHTTP(w http.ResponseWriter, r *http.Request, rdb *redis.Client) {
-	data, err := getLeaderboardData(rdb)
+func handleHTTP(w http.ResponseWriter, r *http.Request) {
+	data, err := getLeaderboardData()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -94,28 +100,74 @@ func handleHTTP(w http.ResponseWriter, r *http.Request, rdb *redis.Client) {
 	json.NewEncoder(w).Encode(data)
 }
 
+func uploadProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.ParseMultipartForm(50 << 20)
+
+	testMode := r.FormValue("test_mode")
+	contestantID := r.FormValue("contestant_id")
+
+	if testMode != "" && contestantID != "" {
+		rdb.Set(ctx, fmt.Sprintf("test_mode:%s", contestantID), testMode, 24*time.Hour)
+	}
+
+	file, header, err := r.FormFile("binary")
+	if err != nil {
+		http.Error(w, "no binary provided", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("binary", header.Filename)
+	io.Copy(part, file)
+	writer.WriteField("contestant_id", contestantID)
+	writer.Close()
+
+	resp, err := http.Post("http://localhost:8080/upload",
+		writer.FormDataContentType(), body)
+	if err != nil {
+		http.Error(w, "sandbox unreachable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	io.Copy(w, resp.Body)
+}
+
 func main() {
-	rdb := redis.NewClient(&redis.Options{
+	rdb = redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
 	})
 
-	// test Redis connection
 	_, err := rdb.Ping(ctx).Result()
 	if err != nil {
 		log.Fatalf("Redis connection failed: %v", err)
 	}
 	fmt.Println("Redis connected")
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleConnections(w, r, rdb)
-	})
-
-	http.HandleFunc("/leaderboard", func(w http.ResponseWriter, r *http.Request) {
-		handleHTTP(w, r, rdb)
-	})
+	http.HandleFunc("/ws", handleConnections)
+	http.HandleFunc("/leaderboard", handleHTTP)
+	http.HandleFunc("/upload", uploadProxy)
 
 	fmt.Println("Leaderboard server started on :8081")
 	fmt.Println("WebSocket: ws://localhost:8081/ws")
 	fmt.Println("HTTP:      http://localhost:8081/leaderboard")
+	fmt.Println("Upload:    http://localhost:8081/upload")
 	log.Fatal(http.ListenAndServe(":8081", nil))
 }

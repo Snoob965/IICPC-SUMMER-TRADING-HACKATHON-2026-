@@ -18,6 +18,21 @@
         .status.connected { color: #3fb950; }
         .status.disconnected { color: #f85149; }
         .countdown { font-size: 0.75rem; color: #8b949e; }
+        .upload-section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+        .upload-title { color: #58a6ff; font-size: 1rem; margin-bottom: 12px; }
+        .upload-form { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+        .upload-form input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 0.85rem; width: 220px; }
+        .upload-form select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 0.85rem; }
+        .file-label { background: #0d1117; border: 1px solid #30363d; color: #8b949e; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+        .file-label input[type="file"] { display: none; }
+        .file-label:hover { border-color: #58a6ff; color: #58a6ff; }
+        .upload-btn { background: #1f6feb; border: none; color: white; padding: 8px 20px; border-radius: 4px; cursor: pointer; font-family: 'Courier New', monospace; font-size: 0.85rem; transition: background 0.2s; }
+        .upload-btn:hover { background: #388bfd; }
+        .upload-btn:disabled { background: #30363d; cursor: not-allowed; }
+        .upload-status { margin-top: 12px; font-size: 0.85rem; }
+        .upload-status.running { color: #d29922; }
+        .upload-status.success { color: #3fb950; }
+        .upload-status.error { color: #f85149; }
         .stats-bar { display: flex; gap: 16px; margin-bottom: 24px; padding: 12px 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
         .stat-item { text-align: center; }
         .stat-value { font-size: 1.4rem; font-weight: bold; color: #58a6ff; }
@@ -64,7 +79,7 @@
         .history-chart-container { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; height: 200px; }
         .good { color: #3fb950; }
         .warn { color: #d29922; }
-        .bad  { color: #f85149; }
+        .bad { color: #f85149; }
     </style>
 </head>
 <body>
@@ -78,6 +93,24 @@
         <p class="status disconnected" id="status">⚡ Connecting...</p>
         <p class="countdown" id="countdown"></p>
     </div>
+</div>
+
+<div class="upload-section">
+    <h2 class="upload-title">🚀 Submit Your Trading Engine</h2>
+    <div class="upload-form">
+        <input type="text" id="contestant-id" placeholder="Your contestant ID (e.g. team_xyz)" />
+        <select id="test-mode">
+            <option value="blitz">⚡ Blitz (40s) — quick check</option>
+            <option value="standard" selected>🏃 Standard (90s) — normal test</option>
+            <option value="marathon">🏋️ Marathon (180s) — full stress</option>
+        </select>
+        <label class="file-label" for="binary-upload">
+            <span id="file-name">Choose Linux binary...</span>
+            <input type="file" id="binary-upload" accept="*/*" onchange="updateFileName(this)" />
+        </label>
+        <button class="upload-btn" onclick="submitBinary()">🚀 Run Stress Test</button>
+    </div>
+    <div id="upload-status" class="upload-status"></div>
 </div>
 
 <div class="stats-bar">
@@ -105,9 +138,8 @@ const expandedRows = new Set();
 const scoreHistory = {};
 const chartInstances = {};
 let historyChart = null;
-let countdown = 1;
-
 let countdownVal = 3;
+
 setInterval(() => {
     if (statusEl.className.includes('connected')) {
         countdownEl.textContent = `updating in ${countdownVal}s`;
@@ -116,7 +148,7 @@ setInterval(() => {
 }, 1000);
 
 ws.onopen = () => {
-    statusEl.textContent = '✓ Connected — live updates every second';
+    statusEl.textContent = '✓ Connected — live updates every 3 seconds';
     statusEl.className = 'status connected';
 };
 
@@ -125,6 +157,60 @@ ws.onclose = () => {
     statusEl.className = 'status disconnected';
     countdownEl.textContent = '';
 };
+
+function updateFileName(input) {
+    document.getElementById('file-name').textContent =
+        input.files[0] ? input.files[0].name : 'Choose Linux binary...';
+}
+
+async function submitBinary() {
+    const contestantID = document.getElementById('contestant-id').value.trim();
+    const mode = document.getElementById('test-mode').value;
+    const fileInput = document.getElementById('binary-upload');
+    const statusEl2 = document.getElementById('upload-status');
+    const btn = document.querySelector('.upload-btn');
+
+    if (!contestantID) {
+        statusEl2.className = 'upload-status error';
+        statusEl2.textContent = '✗ Please enter a contestant ID';
+        return;
+    }
+    if (!fileInput.files[0]) {
+        statusEl2.className = 'upload-status error';
+        statusEl2.textContent = '✗ Please select a binary file';
+        return;
+    }
+
+    btn.disabled = true;
+    statusEl2.className = 'upload-status running';
+    statusEl2.textContent = '⏳ Uploading and containerizing...';
+
+    const formData = new FormData();
+    formData.append('binary', fileInput.files[0]);
+    formData.append('contestant_id', contestantID);
+    formData.append('test_mode', mode);
+
+    try {
+        const resp = await fetch('http://localhost:8081/upload', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await resp.json();
+
+        if (data.status === 'running') {
+            statusEl2.className = 'upload-status success';
+            statusEl2.textContent = `✓ Engine containerized! Stress test starting automatically... watch the leaderboard for "${contestantID}"`;
+        } else {
+            statusEl2.className = 'upload-status error';
+            statusEl2.textContent = '✗ Upload failed: ' + (data.error || 'unknown error');
+        }
+    } catch (err) {
+        statusEl2.className = 'upload-status error';
+        statusEl2.textContent = '✗ Could not connect to server: ' + err.message;
+    }
+
+    btn.disabled = false;
+}
 
 function colorByLatency(ms) {
     if (ms <= 50) return '#3fb950';
@@ -187,11 +273,11 @@ function renderWaveChart(canvasId, waves) {
 function renderHistogram(waves) {
     if (!waves || !waves.length) return '';
     const buckets = [
-        { label: '0-10ms',    check: v => v <= 10 },
-        { label: '10-50ms',   check: v => v > 10 && v <= 50 },
-        { label: '50-100ms',  check: v => v > 50 && v <= 100 },
+        { label: '0-10ms', check: v => v <= 10 },
+        { label: '10-50ms', check: v => v > 10 && v <= 50 },
+        { label: '50-100ms', check: v => v > 50 && v <= 100 },
         { label: '100-250ms', check: v => v > 100 && v <= 250 },
-        { label: '250ms+',    check: v => v > 250 },
+        { label: '250ms+', check: v => v > 250 },
     ];
     const p99s = waves.map(w => w.p99_ms || 0);
     const total = p99s.length;
@@ -199,7 +285,7 @@ function renderHistogram(waves) {
         const count = p99s.filter(b.check).length;
         const pct = total > 0 ? (count / total) * 100 : 0;
         const color = b.label.includes('0-10') || b.label.includes('10-50') ? '#3fb950' : b.label.includes('50-100') ? '#d29922' : '#f85149';
-        return `<div class="hist-row"><span class="hist-label">${b.label}</span><div class="hist-bar-bg"><div class="hist-bar" style="width:${pct*2}%;background:${color}"></div></div><span class="hist-pct">${pct.toFixed(0)}%</span></div>`;
+        return `<div class="hist-row"><span class="hist-label">${b.label}</span><div class="hist-bar-bg"><div class="hist-bar" style="width:${pct * 2}%;background:${color}"></div></div><span class="hist-pct">${pct.toFixed(0)}%</span></div>`;
     }).join('');
     return `<div class="hist-section"><div class="hist-title">P99 Distribution across waves</div>${rows}</div>`;
 }
@@ -246,14 +332,14 @@ function updateStatsBar(data) {
     document.getElementById('stat-contestants').textContent = data.length;
     document.getElementById('stat-best-score').textContent = Math.max(...scores).toFixed(1);
     document.getElementById('stat-best-p99').textContent = Math.min(...p99s).toFixed(0) + 'ms';
-    document.getElementById('stat-avg-score').textContent = (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1);
+    document.getElementById('stat-avg-score').textContent = (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1);
 }
 
 ws.onmessage = function(event) {
-    countdown = 1;
+    countdownVal = 3;
     const data = JSON.parse(event.data);
     if (!data || !data.length) {
-        grid.innerHTML = '<p style="color:#8b949e">No contestants yet — waiting for submissions...</p>';
+        grid.innerHTML = '<p style="color:#8b949e">No contestants yet — upload your binary above to get started!</p>';
         return;
     }
     updateStatsBar(data);
@@ -261,38 +347,39 @@ ws.onmessage = function(event) {
     const maxScore = Math.max(...data.map(c => c.overall_score || 0));
     grid.innerHTML = '';
     data.forEach((c, index) => {
-        const rankClass = index < 3 ? `rank-${index+1}` : '';
+        const rankClass = index < 3 ? `rank-${index + 1}` : '';
         const sc = c.overall_score || 0;
         const scoreBarWidth = maxScore > 0 ? (sc / maxScore) * 100 : 0;
         const chartId = `chart-${index}`;
         const waveRows = (c.waves || []).map(w => `
             <tr>
                 <td>${w.label || 'Wave ' + w.wave_num}</td>
-                <td class="${colorClass(w.p50_ms)}">${w.p50_ms||0}ms</td>
-                <td class="${colorClass(w.p90_ms)}">${w.p90_ms||0}ms</td>
-                <td class="${colorClass(w.p99_ms)}">${w.p99_ms||0}ms</td>
-                <td class="${(w.success_rate||0)>=99?'good':(w.success_rate||0)>=95?'warn':'bad'}">${(w.success_rate||0).toFixed(1)}%</td>
-                <td class="${(w.correctness||0)>=99?'good':(w.correctness||0)>=95?'warn':'bad'}">${(w.correctness||0).toFixed(1)}%</td>
-                <td class="${(w.score||0)>30?'good':(w.score||0)>10?'warn':'bad'}">${(w.score||0).toFixed(2)}</td>
+                <td class="${colorClass(w.p50_ms)}">${w.p50_ms || 0}ms</td>
+                <td class="${colorClass(w.p90_ms)}">${w.p90_ms || 0}ms</td>
+                <td class="${colorClass(w.p99_ms)}">${w.p99_ms || 0}ms</td>
+                <td class="${colorClass(w.p999_ms)}">${w.p999_ms || 0}ms</td>
+                <td class="${(w.success_rate || 0) >= 99 ? 'good' : (w.success_rate || 0) >= 95 ? 'warn' : 'bad'}">${(w.success_rate || 0).toFixed(1)}%</td>
+                <td class="${(w.correctness || 0) >= 99 ? 'good' : (w.correctness || 0) >= 95 ? 'warn' : 'bad'}">${(w.correctness || 0).toFixed(1)}%</td>
+                <td class="${(w.score || 0) > 30 ? 'good' : (w.score || 0) > 10 ? 'warn' : 'bad'}">${(w.score || 0).toFixed(2)}</td>
             </tr>`).join('');
         const waveTable = c.waves?.length ? `
             <table class="wave-table">
-                <thead><tr><th>Wave</th><th>P50</th><th>P90</th><th>P99</th><th>Success</th><th>Correct</th><th>Score</th></tr></thead>
+                <thead><tr><th>Wave</th><th>P50</th><th>P90</th><th>P99</th><th>P99.9</th><th>Success</th><th>Correct</th><th>Score</th></tr></thead>
                 <tbody>${waveRows}</tbody>
             </table>` : '';
         const card = document.createElement('div');
         card.className = `contestant-card ${rankClass}`;
         card.innerHTML = `
             <div class="card-header">
-                <div class="card-rank">#${index+1}</div>
+                <div class="card-rank">#${index + 1}</div>
                 <div class="card-name">${c.contestant_id}</div>
                 <div class="card-score ${scoreColorClass(sc)}">${sc.toFixed(2)}</div>
             </div>
             <div class="score-bar-bg"><div class="score-bar" style="width:${scoreBarWidth}%;background:${scoreBarColor(sc)}"></div></div>
             <div class="card-metrics">
-                <div class="metric"><div class="metric-value ${colorClass(c.overall_p99)}">${(c.overall_p99||0).toFixed(0)}ms</div><div class="metric-label">Overall P99</div></div>
-                <div class="metric"><div class="metric-value ${(c.overall_success_rate||0)>=99?'good':'warn'}">${(c.overall_success_rate||0).toFixed(1)}%</div><div class="metric-label">Success Rate</div></div>
-                <div class="metric"><div class="metric-value good">${(c.waves?.length||0)*160}</div><div class="metric-label">Orders Tested</div></div>
+                <div class="metric"><div class="metric-value ${colorClass(c.overall_p99)}">${(c.overall_p99 || 0).toFixed(0)}ms</div><div class="metric-label">Overall P99</div></div>
+                <div class="metric"><div class="metric-value ${(c.overall_success_rate || 0) >= 99 ? 'good' : 'warn'}">${(c.overall_success_rate || 0).toFixed(1)}%</div><div class="metric-label">Success Rate</div></div>
+                <div class="metric"><div class="metric-value good">${(c.waves?.length || 0) * 160}</div><div class="metric-label">Orders Tested</div></div>
             </div>
             ${getBreakingBadge(c.waves)}
             <div class="chart-container"><canvas id="${chartId}"></canvas></div>
