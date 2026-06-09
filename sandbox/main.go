@@ -23,28 +23,72 @@ var rdb = redis.NewClient(&redis.Options{
 	DB:       0,
 })
 
+// PORT POOL — ports 8082–8181 (100 slots)
+const portPoolKey = "sandbox:port_pool"
+const portMin = 8082
+const portMax = 8181
+
+func initPortPool() {
+	// Only seed the pool if it's empty
+	size, _ := rdb.SCard(ctx, portPoolKey).Result()
+	if size > 0 {
+		return
+	}
+	pipe := rdb.Pipeline()
+	for p := portMin; p <= portMax; p++ {
+		pipe.SAdd(ctx, portPoolKey, fmt.Sprintf("%d", p))
+	}
+	pipe.Exec(ctx)
+	fmt.Printf("Port pool initialised: %d–%d (%d slots)\n", portMin, portMax, portMax-portMin+1)
+}
+
+func acquirePort() (string, error) {
+	port, err := rdb.SPop(ctx, portPoolKey).Result()
+	if err != nil {
+		return "", fmt.Errorf("no free ports available — all %d slots in use", portMax-portMin+1)
+	}
+	return port, nil
+}
+
+func releasePort(port string) {
+	rdb.SAdd(ctx, portPoolKey, port)
+}
+
 type ExecutionResult struct {
-	Status        string           `json:"status"`
-	Output        string           `json:"output"`
-	Validation    ValidationResult `json:"validation"`
-	Error         string           `json:"error,omitempty"`
-	ContestantID  string           `json:"contestant_id"`
-	TargetURL     string           `json:"target_url"`
+	Status       string           `json:"status"`
+	Output       string           `json:"output"`
+	Validation   ValidationResult `json:"validation"`
+	Error        string           `json:"error,omitempty"`
+	ContestantID string           `json:"contestant_id"`
+	TargetURL    string           `json:"target_url"`
 }
 
 func startContestantContainer(binaryPath string, contestantID string) (string, error) {
 	absPath, _ := filepath.Abs(binaryPath)
-	port := "8082"
 
-	// stop any existing container for this contestant
+	// Acquire a free port from the pool
+	port, err := acquirePort()
+	if err != nil {
+		return "", err
+	}
+
+	// Stop and remove only this contestant's existing container — never another's
 	exec.Command("docker", "stop", fmt.Sprintf("contestant_%s", contestantID)).Run()
 	exec.Command("docker", "rm", fmt.Sprintf("contestant_%s", contestantID)).Run()
+
+	// Release any port this contestant was previously holding
+	if oldPort, err := rdb.Get(ctx, fmt.Sprintf("sandbox:%s:port", contestantID)).Result(); err == nil {
+		releasePort(oldPort)
+	}
 
 	cmd := exec.Command("docker", "run", "-d",
 		"--name", fmt.Sprintf("contestant_%s", contestantID),
 		"--memory=256m",
 		"--cpus=1.0",
 		"--security-opt=no-new-privileges",
+		"--network=none",       // no outbound access — prevents malicious binaries calling home
+		"--read-only",          // immutable filesystem
+		"--pids-limit=128",     // prevent fork bombs
 		"-p", fmt.Sprintf("%s:8080", port),
 		"-v", fmt.Sprintf("%s:/app/contestant_bot:ro", absPath),
 		"ubuntu:22.04",
@@ -52,10 +96,11 @@ func startContestantContainer(binaryPath string, contestantID string) (string, e
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		releasePort(port) // give the port back on failure
 		return "", fmt.Errorf("container start failed: %s", string(output))
 	}
 
-	// publish port to Redis so bot fleet can find it
+	// Persist port and status in Redis
 	rdb.Set(ctx, fmt.Sprintf("sandbox:%s:port", contestantID), port, 30*time.Minute)
 	rdb.Set(ctx, fmt.Sprintf("sandbox:%s:status", contestantID), "running", 30*time.Minute)
 
@@ -63,7 +108,30 @@ func startContestantContainer(binaryPath string, contestantID string) (string, e
 	return port, nil
 }
 
+// waitForContainer polls GET /orderbook on the container until it responds
+// or the timeout is reached. Replaces the old time.Sleep(2s).
+func waitForContainer(port string) error {
+	url := fmt.Sprintf("http://localhost:%s/orderbook", port)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return nil // container is up and responding
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("container did not become ready within 15 seconds on port %s", port)
+}
+
 func stopContestantContainer(contestantID string) {
+	// Release the port back to the pool before stopping
+	if port, err := rdb.Get(ctx, fmt.Sprintf("sandbox:%s:port", contestantID)).Result(); err == nil {
+		releasePort(port)
+	}
 	exec.Command("docker", "stop", fmt.Sprintf("contestant_%s", contestantID)).Run()
 	exec.Command("docker", "rm", fmt.Sprintf("contestant_%s", contestantID)).Run()
 	rdb.Del(ctx, fmt.Sprintf("sandbox:%s:port", contestantID))
@@ -100,7 +168,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	port, err := startContestantContainer(dstPath, contestantID)
 	if err != nil {
 		result := ExecutionResult{
-			Status:       "Failed",
+			Status:       "failed",
 			Error:        err.Error(),
 			ContestantID: contestantID,
 		}
@@ -110,14 +178,37 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// wait for container to be ready
-	time.Sleep(2 * time.Second)
+	// Poll until the container is actually serving — no more fixed sleep
+	if err := waitForContainer(port); err != nil {
+		stopContestantContainer(contestantID)
+		result := ExecutionResult{
+			Status:       "failed",
+			Error:        err.Error(),
+			ContestantID: contestantID,
+		}
+		jsonBytes, _ := json.Marshal(result)
+		rdb.Publish(ctx, "sandbox_logs", jsonBytes)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Capture container stdout via docker logs and run basic exchange logic validation.
+	// This checks for phantom fills (more fills than orders) using the ORDER:/FILL: prefix
+	// convention. Contestants must log in this format for the check to fire.
+	logs, _ := exec.Command("docker", "logs", fmt.Sprintf("contestant_%s", contestantID)).CombinedOutput()
+	validation := ValidateExecutionLogs(string(logs))
+	if !validation.IsValid {
+		fmt.Printf("[Sandbox] Validation failed for %s: %s\n", contestantID, validation.Reason)
+	} else {
+		fmt.Printf("[Sandbox] Validation passed for %s: %s\n", contestantID, validation.Reason)
+	}
 
 	result := ExecutionResult{
 		Status:       "running",
 		ContestantID: contestantID,
 		TargetURL:    fmt.Sprintf("http://localhost:%s", port),
 		Output:       "Container started successfully",
+		Validation:   validation,
 	}
 
 	jsonBytes, _ := json.Marshal(result)
@@ -149,6 +240,9 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Seed the port pool on startup (idempotent — safe to call on restart)
+	initPortPool()
+
 	http.HandleFunc("/upload", uploadHandler)
 	http.HandleFunc("/stop", stopHandler)
 

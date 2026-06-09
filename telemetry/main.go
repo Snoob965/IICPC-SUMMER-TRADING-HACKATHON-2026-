@@ -23,6 +23,7 @@ type Result struct {
 	Success   bool          `json:"success"`
 	Correct   bool          `json:"correct"`
 	Wave      int           `json:"wave"`
+	StartedAt int64         `json:"started_at_ns"` // unix nanoseconds — for real TPS
 }
 
 type WaveScore struct {
@@ -61,10 +62,14 @@ func percentile(latencies []float64, p float64) float64 {
 	return latencies[index]
 }
 
-func consumeFromRedpanda(expectedCount int) []Result {
+// consumeFromRedpanda reads from a per-contestant topic.
+// It stops when expectedCount messages arrive OR the deadline passes —
+// whichever comes first. This prevents indefinite blocking on crashes or
+// short-runs (chaos wave, partial bot fleet, etc.).
+func consumeFromRedpanda(topic string, expectedCount int, timeout time.Duration) []Result {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers("localhost:9092"),
-		kgo.ConsumeTopics("bot-results"),
+		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 	)
 	if err != nil {
@@ -73,17 +78,30 @@ func consumeFromRedpanda(expectedCount int) []Result {
 	}
 	defer client.Close()
 
+	deadline := time.Now().Add(timeout)
 	var results []Result
+
 	for len(results) < expectedCount {
-		fetches := client.PollFetches(ctx)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			fmt.Printf("⚠  Telemetry timeout reached — collected %d/%d results, scoring what we have\n",
+				len(results), expectedCount)
+			break
+		}
+
+		pollCtx, cancel := context.WithTimeout(ctx, remaining)
+		fetches := client.PollFetches(pollCtx)
+		cancel()
+
 		fetches.EachRecord(func(r *kgo.Record) {
 			var result Result
-			json.Unmarshal(r.Value, &result)
-			results = append(results, result)
+			if err := json.Unmarshal(r.Value, &result); err == nil {
+				results = append(results, result)
+			}
 		})
 	}
 
-	fmt.Printf("Consumed %d results from Redpanda\n", len(results))
+	fmt.Printf("Consumed %d results from topic %s\n", len(results), topic)
 	return results
 }
 
@@ -91,6 +109,35 @@ func checkSampleSize(results []Result, waveNum int) {
 	if len(results) < 1000 {
 		fmt.Printf("⚠  Wave %d: only %d samples — p99 may not be statistically reliable (need 1000+). Run with --bots 1000 for valid p99.\n", waveNum, len(results))
 	}
+}
+
+// computeTPS derives TPS from the actual elapsed time of the wave results
+// rather than a hardcoded magic number.
+func computeTPS(results []Result) float64 {
+	if len(results) == 0 {
+		return 0
+	}
+	var minNs, maxNs int64 = math.MaxInt64, 0
+	for _, r := range results {
+		if r.StartedAt > 0 {
+			if r.StartedAt < minNs {
+				minNs = r.StartedAt
+			}
+			end := r.StartedAt + int64(r.Latency)
+			if end > maxNs {
+				maxNs = end
+			}
+		}
+	}
+	if maxNs <= minNs {
+		// StartedAt not populated by bot fleet yet — fall back to wave order count / 15s
+		return float64(len(results)) / 15.0
+	}
+	elapsedSecs := float64(maxNs-minNs) / 1e9
+	if elapsedSecs < 0.001 {
+		return 0
+	}
+	return float64(len(results)) / elapsedSecs
 }
 
 func scoreWave(results []Result, waveNum int, label string) WaveScore {
@@ -118,10 +165,10 @@ func scoreWave(results []Result, waveNum int, label string) WaveScore {
 	p999 := float64(hist.ValueAtQuantile(99.9))
 	successRate := float64(success) / float64(total) * 100
 	correctness := float64(correct) / float64(total) * 100
-	tps := float64(total) / 15.0
-        p99Factor := 1000.0 / (float64(p99) + 1.0)
-        p999Factor := 1000.0 / (float64(p999) + 1.0)
-        score := p99Factor * p999Factor * successRate * correctness
+	tps := computeTPS(results)
+	p99Factor := 1000.0 / (float64(p99) + 1.0)
+	p999Factor := 1000.0 / (float64(p999) + 1.0)
+	score := p99Factor * p999Factor * successRate * correctness
 
 	return WaveScore{
 		WaveNum:     waveNum,
@@ -326,13 +373,15 @@ func main() {
 	expectedResults := flag.Int("expected", 640, "Expected number of results from Redpanda")
 	contestantID := flag.String("contestant", "contestant_001", "Contestant ID to score")
 	maxBots := flag.Int("maxbots", 100, "Max bots used in the stress test")
+	topic := flag.String("topic", "bot-results", "Redpanda topic to consume from")
+	timeoutSecs := flag.Int("timeout", 300, "Max seconds to wait for results before scoring partial data")
 	flag.Parse()
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
 	})
 
-	allResults := consumeFromRedpanda(*expectedResults)
+	allResults := consumeFromRedpanda(*topic, *expectedResults, time.Duration(*timeoutSecs)*time.Second)
 
 	waveMap := map[int][]Result{}
 	for _, r := range allResults {
