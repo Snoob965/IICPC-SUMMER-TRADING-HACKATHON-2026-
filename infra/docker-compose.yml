@@ -1,5 +1,7 @@
 version: '3.8'
+
 services:
+  # ─── Infrastructure ──────────────────────────────────────────────────────────
   redpanda:
     image: redpandadata/redpanda:latest
     command:
@@ -44,3 +46,57 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # ─── Application Services ────────────────────────────────────────────────────
+  sandbox:
+    build:
+      context: ../sandbox
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount Docker socket so sandbox can docker run contestant containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sandbox-uploads:/app/uploads
+    environment:
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: ../orchestrator
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDPANDA_ADDR=redpanda:9092
+    depends_on:
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      sandbox:
+        condition: service_started
+    restart: unless-stopped
+
+  leaderboard:
+    build:
+      context: ../leaderboard/backend
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - SANDBOX_URL=http://sandbox:8080
+      - JWT_SECRET=${JWT_SECRET:-iicpc-hackathon-secret-change-in-prod}
+    depends_on:
+      redis:
+        condition: service_healthy
+      sandbox:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  sandbox-uploads:
