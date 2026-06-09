@@ -1,2 +1,4 @@
 .DS_Store
 platform.zip
+sandbox/uploads/*.zip
+sandbox/uploads/*.binary

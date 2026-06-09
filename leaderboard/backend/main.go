@@ -9,11 +9,21 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
+
+// sandboxURL returns the sandbox base URL.
+// Override via SANDBOX_URL env var for Docker or remote deployments.
+func sandboxURL() string {
+	if u := os.Getenv("SANDBOX_URL"); u != "" {
+		return u
+	}
+	return "http://localhost:8080"
+}
 
 var ctx = context.Background()
 var upgrader = websocket.Upgrader{
@@ -137,7 +147,7 @@ func uploadProxy(w http.ResponseWriter, r *http.Request) {
 	writer.WriteField("contestant_id", contestantID)
 	writer.Close()
 
-	resp, err := http.Post("http://localhost:8080/upload",
+	resp, err := http.Post(sandboxURL()+"/upload",
 		writer.FormDataContentType(), body)
 	if err != nil {
 		http.Error(w, "sandbox unreachable", http.StatusServiceUnavailable)

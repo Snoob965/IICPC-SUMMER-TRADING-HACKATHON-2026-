@@ -37,6 +37,7 @@ type Result struct {
 	BotID        int           `json:"bot_id"`
 	OrderType    string        `json:"order_type"`
 	Latency      time.Duration `json:"latency_ns"`
+	StartedAt    int64         `json:"started_at_ns"`
 	Success      bool          `json:"success"`
 	ContestantID string        `json:"contestant_id"`
 	Correct      bool          `json:"correct"`
@@ -213,13 +214,13 @@ func runBot(botID int, targetURL string, contestantID string, orderType string, 
 	latency := time.Since(start)
 
 	if err != nil || resp.StatusCode != 200 {
-		results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: false, ContestantID: contestantID, Correct: false, Wave: waveNum, Instrument: instrument}
+		results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, StartedAt: start.UnixNano(), Success: false, ContestantID: contestantID, Correct: false, Wave: waveNum, Instrument: instrument}
 		return
 	}
 	defer resp.Body.Close()
 
 	correct := validateCorrectness(targetURL, order)
-	results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, Success: true, ContestantID: contestantID, Correct: correct, Wave: waveNum, Instrument: instrument}
+	results <- Result{BotID: botID, OrderType: order.Type, Latency: latency, StartedAt: start.UnixNano(), Success: true, ContestantID: contestantID, Correct: correct, Wave: waveNum, Instrument: instrument}
 }
 
 func spawnBots(targetURL string, contestantID string, numBots int, orderType string, waveNum int, instrument string) []Result {
@@ -351,6 +352,47 @@ func pushToRedpanda(results []Result, topic string) {
 	fmt.Printf("\nPushed %d total results to Redpanda topic: %s\n", len(results), topic)
 }
 
+// pushWaveProgress writes a single wave's live stats to Redis immediately after
+// the wave finishes. The leaderboard frontend polls this key to show a progress
+// bar and per-wave scores during the test — no need to wait for full scoring.
+// Key: leaderboard:progress:{contestantID}
+// Value: JSON array of WaveProgress entries, one per completed wave so far.
+type WaveProgress struct {
+	WaveNum     int     `json:"wave_num"`
+	Label       string  `json:"label"`
+	P50         float64 `json:"p50_ms"`
+	P99         float64 `json:"p99_ms"`
+	SuccessRate float64 `json:"success_rate"`
+	Correctness float64 `json:"correctness"`
+	Done        bool    `json:"done"` // true = all waves complete
+}
+
+func pushWaveProgress(rdb *redis.Client, contestantID string, wave WaveResult, totalWaves int, done bool) {
+	key := fmt.Sprintf("leaderboard:progress:%s", contestantID)
+
+	// Read the existing progress array (if any) and append the new wave
+	existing, err := rdb.Get(ctx, key).Result()
+	var progress []WaveProgress
+	if err == nil {
+		json.Unmarshal([]byte(existing), &progress)
+	}
+
+	progress = append(progress, WaveProgress{
+		WaveNum:     wave.WaveNum,
+		Label:       wave.Label,
+		P50:         wave.P50,
+		P99:         wave.P99,
+		SuccessRate: wave.SR,
+		Correctness: wave.CR,
+		Done:        done,
+	})
+
+	data, _ := json.Marshal(progress)
+	// TTL of 2 hours — long enough to survive any test mode, auto-cleans after
+	rdb.Set(ctx, key, data, 2*time.Hour)
+	fmt.Printf("[Progress] Wave %d/%d pushed for %s\n", wave.WaveNum, totalWaves, contestantID)
+}
+
 func printFinalReport(waves []WaveResult, totalDuration time.Duration, mode string) {
 	fmt.Printf("\n╔══════════════════════════════════════════════╗\n")
 	fmt.Printf("║           STRESS TEST FINAL REPORT          ║\n")
@@ -438,32 +480,40 @@ func main() {
 			fmt.Printf("\n=== STRESS TEST: %v | %d bots | %s | mode=%s ===\n", totalDuration, numBots, contestantID, mode)
 
 			start := time.Now()
-			var allResults []Result
 
-			w1 := runWave(1, "Limit Orders", "limit", resolvedURL, contestantID, numBots, waveDuration, "ETH")
-			w2 := runWave(2, "Market Orders", "market", resolvedURL, contestantID, numBots, waveDuration, "ETH")
-			w3 := runWave(3, "Cancel Orders", "cancel", resolvedURL, contestantID, numBots, waveDuration, "ETH")
-			w4 := runWave(4, "Mixed Sustained", "mixed", resolvedURL, contestantID, numBots, waveDuration, "ETH")
-			w5 := runChaosWave(5, resolvedURL, contestantID, numBots/2, waveDuration)
-
-			allResults = append(allResults, w1.Results...)
-			allResults = append(allResults, w2.Results...)
-			allResults = append(allResults, w3.Results...)
-			allResults = append(allResults, w4.Results...)
-			allResults = append(allResults, w5.Results...)
-
+			totalWaves := 5
 			if multiInstrument {
-				w6 := runWave(6, "BTC Multi-Instrument", "mixed", resolvedURL, contestantID, numBots/2, waveDuration, "BTC")
-				allResults = append(allResults, w6.Results...)
-				elapsed := time.Since(start)
-				printFinalReport([]WaveResult{w1, w2, w3, w4, w5, w6}, elapsed, mode)
-			} else {
-				elapsed := time.Since(start)
-				printFinalReport([]WaveResult{w1, w2, w3, w4, w5}, elapsed, mode)
+				totalWaves = 6
 			}
 
-			pushToRedpanda(allResults, topic)
-			runPriceTimePriorityTest(targetURL)
+			w1 := runWave(1, "Limit Orders", "limit", resolvedURL, contestantID, numBots, waveDuration, "ETH")
+			pushWaveProgress(rdb, contestantID, w1, totalWaves, false)
+
+			w2 := runWave(2, "Market Orders", "market", resolvedURL, contestantID, numBots, waveDuration, "ETH")
+			pushWaveProgress(rdb, contestantID, w2, totalWaves, false)
+
+			w3 := runWave(3, "Cancel Orders", "cancel", resolvedURL, contestantID, numBots, waveDuration, "ETH")
+			pushWaveProgress(rdb, contestantID, w3, totalWaves, false)
+
+			w4 := runWave(4, "Mixed Sustained", "mixed", resolvedURL, contestantID, numBots, waveDuration, "ETH")
+			pushWaveProgress(rdb, contestantID, w4, totalWaves, false)
+
+			w5 := runChaosWave(5, resolvedURL, contestantID, numBots/2, waveDuration)
+
+			if multiInstrument {
+				// w5 is not the last wave — don't mark done yet
+				pushWaveProgress(rdb, contestantID, w5, totalWaves, false)
+				w6 := runWave(6, "BTC Multi-Instrument", "mixed", resolvedURL, contestantID, numBots/2, waveDuration, "BTC")
+				pushWaveProgress(rdb, contestantID, w6, totalWaves, true) // done=true on last wave
+				elapsed := time.Since(start)
+				printFinalReport([]WaveResult{w1, w2, w3, w4, w5, w6}, elapsed, mode)
+				pushToRedpanda(append(w1.Results, append(w2.Results, append(w3.Results, append(w4.Results, append(w5.Results, w6.Results...)...)...)...)...), topic)
+			} else {
+				pushWaveProgress(rdb, contestantID, w5, totalWaves, true) // done=true — all 5 waves complete
+				elapsed := time.Since(start)
+				printFinalReport([]WaveResult{w1, w2, w3, w4, w5}, elapsed, mode)
+				pushToRedpanda(append(w1.Results, append(w2.Results, append(w3.Results, append(w4.Results, w5.Results...)...)...)...), topic)
+			}
 		},
 	}
 
