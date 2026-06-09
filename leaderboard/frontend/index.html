@@ -18,6 +18,57 @@
         .status.connected { color: #3fb950; }
         .status.disconnected { color: #f85149; }
         .countdown { font-size: 0.75rem; color: #8b949e; }
+
+        /* ── Auth ── */
+        .auth-section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+        .auth-title { color: #58a6ff; font-size: 1rem; margin-bottom: 12px; }
+        .auth-tabs { display: flex; gap: 0; margin-bottom: 16px; }
+        .auth-tab { padding: 6px 18px; font-size: 12px; cursor: pointer; background: #0d1117; border: 1px solid #30363d; color: #8b949e; transition: all .15s; }
+        .auth-tab:first-child { border-radius: 4px 0 0 4px; }
+        .auth-tab:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+        .auth-tab.active { background: #1f6feb; border-color: #1f6feb; color: white; }
+        .auth-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        .auth-form input { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 0.85rem; width: 200px; }
+        .auth-btn { background: #1f6feb; border: none; color: white; padding: 8px 20px; border-radius: 4px; cursor: pointer; font-family: 'Courier New', monospace; font-size: 0.85rem; transition: background 0.2s; }
+        .auth-btn:hover { background: #388bfd; }
+        .auth-status { margin-top: 10px; font-size: 0.82rem; }
+        .auth-status.ok { color: #3fb950; }
+        .auth-status.err { color: #f85149; }
+        .logged-in-bar { display: flex; align-items: center; gap: 12px; }
+        .logged-in-label { color: #3fb950; font-size: 0.85rem; }
+        .logout-btn { background: none; border: 1px solid #30363d; color: #8b949e; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.78rem; font-family: 'Courier New', monospace; }
+        .logout-btn:hover { border-color: #f85149; color: #f85149; }
+
+        /* ── Upload ── */
+
+        /* ── How to submit guide ── */
+        .guide-section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 24px; overflow: hidden; }
+        .guide-toggle { width: 100%; padding: 14px 20px; background: none; border: none; color: #58a6ff; font-family: 'Courier New', monospace; font-size: 0.95rem; text-align: left; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .guide-toggle:hover { background: #1c2128; }
+        .guide-toggle .arrow { transition: transform .2s; font-size: 0.8rem; color: #8b949e; }
+        .guide-toggle.open .arrow { transform: rotate(180deg); }
+        .guide-body { display: none; padding: 0 20px 20px; }
+        .guide-body.open { display: block; }
+        .guide-intro { font-size: 0.83rem; color: #8b949e; margin-bottom: 16px; line-height: 1.6; }
+        .guide-intro b { color: #c9d1d9; }
+        .guide-tabs { display: flex; gap: 0; margin-bottom: 14px; }
+        .guide-tab { padding: 5px 16px; font-size: 11px; cursor: pointer; background: #0d1117; border: 1px solid #30363d; color: #8b949e; font-family: 'Courier New', monospace; transition: all .15s; }
+        .guide-tab:first-child { border-radius: 4px 0 0 4px; }
+        .guide-tab:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+        .guide-tab.active { background: #1f6feb; border-color: #1f6feb; color: white; }
+        .lang-block { display: none; }
+        .lang-block.active { display: block; }
+        .guide-step { margin-bottom: 14px; }
+        .guide-step-title { font-size: 0.78rem; color: #58a6ff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+        .guide-code { background: #0d1117; border: 1px solid #21262d; border-radius: 4px; padding: 10px 14px; font-size: 0.8rem; color: #e6edf3; font-family: 'Courier New', monospace; white-space: pre; overflow-x: auto; line-height: 1.6; }
+        .api-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 6px; }
+        .api-table th { background: #0d1117; color: #58a6ff; padding: 6px 10px; text-align: left; font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid #30363d; }
+        .api-table td { padding: 7px 10px; border-bottom: 1px solid #1c2128; color: #c9d1d9; vertical-align: top; }
+        .api-table td:first-child { color: #3fb950; font-family: 'Courier New', monospace; white-space: nowrap; }
+        .api-table td:nth-child(2) { color: #d29922; white-space: nowrap; }
+        .guide-warn { background: #2d1f00; border: 1px solid #4a3000; border-radius: 4px; padding: 8px 12px; font-size: 0.78rem; color: #d29922; margin-top: 10px; line-height: 1.6; }
+        .guide-warn b { color: #e6a010; }
+
         .upload-section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
         .upload-title { color: #58a6ff; font-size: 1rem; margin-bottom: 12px; }
         .upload-form { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -33,10 +84,24 @@
         .upload-status.running { color: #d29922; }
         .upload-status.success { color: #3fb950; }
         .upload-status.error { color: #f85149; }
+
+        /* ── Live progress bar ── */
+        .progress-section { margin-top: 14px; display: none; }
+        .progress-title { font-size: 0.75rem; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .waves-progress { display: flex; gap: 6px; flex-wrap: wrap; }
+        .wave-pill { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 90px; }
+        .wave-pill-label { font-size: 0.68rem; color: #8b949e; }
+        .wave-pill-bar-bg { width: 100%; height: 6px; background: #21262d; border-radius: 3px; }
+        .wave-pill-bar { height: 100%; border-radius: 3px; transition: width .4s; }
+        .wave-pill-p99 { font-size: 0.68rem; }
+
+        /* ── Stats ── */
         .stats-bar { display: flex; gap: 16px; margin-bottom: 24px; padding: 12px 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
         .stat-item { text-align: center; }
         .stat-value { font-size: 1.4rem; font-weight: bold; color: #58a6ff; }
         .stat-label { font-size: 0.7rem; color: #8b949e; text-transform: uppercase; }
+
+        /* ── Cards ── */
         .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; margin-bottom: 32px; }
         .contestant-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; transition: border-color 0.2s; }
         .contestant-card:hover { border-color: #58a6ff; }
@@ -79,7 +144,7 @@
         .history-chart-container { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; height: 200px; }
         .good { color: #3fb950; }
         .warn { color: #d29922; }
-        .bad { color: #f85149; }
+        .bad  { color: #f85149; }
     </style>
 </head>
 <body>
@@ -95,22 +160,195 @@
     </div>
 </div>
 
+<!-- ── Auth ─────────────────────────────────────────────────────────────── -->
+<div class="auth-section" id="auth-section">
+    <h2 class="auth-title">🔐 Account</h2>
+    <div id="auth-logged-out">
+        <div class="auth-tabs">
+            <button class="auth-tab active" onclick="switchAuthTab('login')">Login</button>
+            <button class="auth-tab" onclick="switchAuthTab('register')">Register</button>
+        </div>
+        <div class="auth-form">
+            <input type="text" id="auth-username" placeholder="Username" autocomplete="username" />
+            <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password" />
+            <button class="auth-btn" id="auth-submit-btn" onclick="submitAuth()">Login</button>
+        </div>
+        <div id="auth-status" class="auth-status"></div>
+    </div>
+    <div id="auth-logged-in" style="display:none">
+        <div class="logged-in-bar">
+            <span class="logged-in-label">✓ Logged in as <strong id="logged-in-username"></strong></span>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+    </div>
+</div>
+
+
+<!-- ── How to Submit Guide ─────────────────────────────────────────────────── -->
+<div class="guide-section">
+    <button class="guide-toggle" onclick="toggleGuide(this)">
+        <span>📖 How to prepare and submit your matching engine</span>
+        <span class="arrow">▼</span>
+    </button>
+    <div class="guide-body">
+        <p class="guide-intro">
+            Your matching engine needs to be compiled into a <b>single Linux x86-64 binary</b> that listens on <b>port 8080</b> and exposes the REST endpoints below.
+            The platform will containerise it, run a bot fleet against it, and score it automatically. No Docker knowledge needed — just compile and upload.
+        </p>
+
+        <!-- API contract -->
+        <div class="guide-step">
+            <div class="guide-step-title">① Required API contract — your binary must expose these endpoints</div>
+            <table class="api-table">
+                <thead><tr><th>Endpoint</th><th>Method</th><th>Request body</th><th>Expected response</th></tr></thead>
+                <tbody>
+                    <tr>
+                        <td>POST /order</td><td>POST</td>
+                        <td>{"bot_id":1,"type":"limit","side":"buy","price":100.5,"quantity":10}</td>
+                        <td>{"order_id":"abc123","status":"accepted"}</td>
+                    </tr>
+                    <tr>
+                        <td>DELETE /order/:id</td><td>DELETE</td>
+                        <td>—</td>
+                        <td>{"status":"cancelled"} or {"status":"not_found"}</td>
+                    </tr>
+                    <tr>
+                        <td>GET /orderbook</td><td>GET</td>
+                        <td>—</td>
+                        <td>{"bids":[...],"asks":[...]} — used as health check on startup</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="guide-warn">
+                <b>Logging convention (optional but recommended):</b> print <code>ORDER: &lt;id&gt;</code> and <code>FILL: &lt;id&gt;</code> to stdout for each accepted order and fill.
+                The platform uses these to catch phantom fills (more fills than orders), which counts against your correctness score.
+            </div>
+        </div>
+
+        <!-- Language tabs -->
+        <div class="guide-step">
+            <div class="guide-step-title">② Compile command — pick your language</div>
+            <div class="guide-tabs">
+                <button class="guide-tab active" onclick="switchLang('cpp', this)">C++</button>
+                <button class="guide-tab" onclick="switchLang('rust', this)">Rust</button>
+                <button class="guide-tab" onclick="switchLang('go', this)">Go</button>
+            </div>
+
+            <!-- C++ -->
+            <div class="lang-block active" id="lang-cpp">
+                <div class="guide-step">
+                    <div class="guide-step-title">Install cross-compiler (once, on macOS or Windows)</div>
+                    <div class="guide-code"># macOS
+brew install filosottile/musl-cross/musl-cross
+
+# Ubuntu / WSL — already targets Linux, skip this step</div>
+                </div>
+                <div class="guide-step">
+                    <div class="guide-step-title">Compile — statically linked, no libc dependencies</div>
+                    <div class="guide-code"># On Linux / WSL (recommended)
+g++ -O2 -static -pthread -o matching_engine main.cpp
+file matching_engine   # should say: ELF 64-bit LSB executable, x86-64
+
+# On macOS (cross-compile to Linux)
+x86_64-linux-musl-g++ -O2 -static -pthread -o matching_engine main.cpp</div>
+                </div>
+                <div class="guide-step">
+                    <div class="guide-step-title">Verify before uploading</div>
+                    <div class="guide-code">file matching_engine
+# Expected: ELF 64-bit LSB executable, x86-64, statically linked</div>
+                </div>
+            </div>
+
+            <!-- Rust -->
+            <div class="lang-block" id="lang-rust">
+                <div class="guide-step">
+                    <div class="guide-step-title">Add Linux target (once)</div>
+                    <div class="guide-code">rustup target add x86_64-unknown-linux-musl
+
+# macOS also needs the linker:
+brew install filosottile/musl-cross/musl-cross
+# Then add to ~/.cargo/config.toml:
+# [target.x86_64-unknown-linux-musl]
+# linker = "x86_64-linux-musl-gcc"</div>
+                </div>
+                <div class="guide-step">
+                    <div class="guide-step-title">Compile</div>
+                    <div class="guide-code">cargo build --release --target x86_64-unknown-linux-musl
+# Binary is at:
+./target/x86_64-unknown-linux-musl/release/matching_engine</div>
+                </div>
+                <div class="guide-step">
+                    <div class="guide-step-title">Verify</div>
+                    <div class="guide-code">file ./target/x86_64-unknown-linux-musl/release/matching_engine
+# Expected: ELF 64-bit LSB executable, x86-64, statically linked</div>
+                </div>
+            </div>
+
+            <!-- Go -->
+            <div class="lang-block" id="lang-go">
+                <div class="guide-step">
+                    <div class="guide-step-title">Compile — Go cross-compiles natively, no extra tools needed</div>
+                    <div class="guide-code"># Works from macOS, Windows, or Linux
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o matching_engine .
+
+# Verify
+file matching_engine
+# Expected: ELF 64-bit LSB executable, x86-64, statically linked</div>
+                </div>
+                <div class="guide-step">
+                    <div class="guide-step-title">Tip — make sure your server listens on port 8080</div>
+                    <div class="guide-code">http.ListenAndServe(":8080", nil)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload steps -->
+        <div class="guide-step">
+            <div class="guide-step-title">③ Submit — 4 steps</div>
+            <div class="guide-code">1. Register or log in above
+2. Enter a contestant ID (or leave blank to use your username)
+3. Pick a test mode — Blitz for quick iteration, Standard for scoring, Marathon for full stress
+4. Select your compiled binary and click "Run Stress Test"
+
+The platform will:
+  → Containerise your binary in an isolated sandbox
+  → Spawn a bot fleet and hammer your endpoints
+  → Stream live wave-by-wave progress below the upload button
+  → Post your final score to the leaderboard automatically</div>
+        </div>
+
+        <div class="guide-warn">
+            <b>Common mistakes:</b> forgetting <code>-static</code> (binary links against system libc that doesn't exist in the container) ·
+            listening on the wrong port (must be 8080, not 3000 or 8000) ·
+            not handling concurrent requests (the bot fleet sends hundreds simultaneously — use goroutines / threads) ·
+            crashing on zero-qty or zero-price orders (the chaos wave sends these deliberately — reject them gracefully with a 4xx, don't panic).
+        </div>
+    </div>
+</div>
+
+<!-- ── Upload ────────────────────────────────────────────────────────────── -->
 <div class="upload-section">
     <h2 class="upload-title">🚀 Submit Your Trading Engine</h2>
     <div class="upload-form">
-        <input type="text" id="contestant-id" placeholder="Your contestant ID (e.g. team_xyz)" />
+        <input type="text" id="contestant-id" placeholder="Contestant ID (defaults to username)" />
         <select id="test-mode">
             <option value="blitz">⚡ Blitz (40s) — quick check</option>
             <option value="standard" selected>🏃 Standard (90s) — normal test</option>
             <option value="marathon">🏋️ Marathon (180s) — full stress</option>
         </select>
         <label class="file-label" for="binary-upload">
-            <span id="file-name">Choose Linux binary...</span>
+            <span id="file-name">Choose Linux x86-64 binary...</span>
             <input type="file" id="binary-upload" accept="*/*" onchange="updateFileName(this)" />
         </label>
         <button class="upload-btn" onclick="submitBinary()">🚀 Run Stress Test</button>
     </div>
     <div id="upload-status" class="upload-status"></div>
+
+    <!-- Live wave progress bar — shown after upload starts -->
+    <div class="progress-section" id="progress-section">
+        <div class="progress-title">⚡ Live Test Progress</div>
+        <div class="waves-progress" id="waves-progress"></div>
+    </div>
 </div>
 
 <div class="stats-bar">
@@ -130,7 +368,30 @@
 </div>
 
 <script>
-const ws = new WebSocket('ws://localhost:8081/ws');
+
+// ── Guide toggle + language switcher ─────────────────────────────────────────
+function toggleGuide(btn) {
+    btn.classList.toggle('open');
+    const body = btn.nextElementSibling;
+    body.classList.toggle('open');
+}
+
+function switchLang(lang, tab) {
+    document.querySelectorAll('.guide-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.lang-block').forEach(b => b.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('lang-' + lang).classList.add('active');
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const API = 'http://localhost:8081';
+let authToken = localStorage.getItem('iicpc_token') || '';
+let authUsername = localStorage.getItem('iicpc_username') || '';
+let currentAuthMode = 'login';
+let progressPoller = null;
+let activeContestantID = '';
+
+const ws = new WebSocket(`ws://localhost:8081/ws`);
 const statusEl = document.getElementById('status');
 const countdownEl = document.getElementById('countdown');
 const grid = document.getElementById('cards-grid');
@@ -140,49 +401,140 @@ const chartInstances = {};
 let historyChart = null;
 let countdownVal = 3;
 
-setInterval(() => {
-    if (statusEl.className.includes('connected')) {
-        countdownEl.textContent = `updating in ${countdownVal}s`;
-        countdownVal = countdownVal <= 1 ? 3 : countdownVal - 1;
+// ── Auth UI ───────────────────────────────────────────────────────────────────
+function refreshAuthUI() {
+    if (authToken && authUsername) {
+        document.getElementById('auth-logged-out').style.display = 'none';
+        document.getElementById('auth-logged-in').style.display = 'block';
+        document.getElementById('logged-in-username').textContent = authUsername;
+        document.getElementById('contestant-id').placeholder = `Contestant ID (defaults to ${authUsername})`;
+    } else {
+        document.getElementById('auth-logged-out').style.display = 'block';
+        document.getElementById('auth-logged-in').style.display = 'none';
+        document.getElementById('contestant-id').placeholder = 'Contestant ID (login first)';
     }
-}, 1000);
+}
 
-ws.onopen = () => {
-    statusEl.textContent = '✓ Connected — live updates every 3 seconds';
-    statusEl.className = 'status connected';
-};
+function switchAuthTab(mode) {
+    currentAuthMode = mode;
+    document.querySelectorAll('.auth-tab').forEach((t, i) => {
+        t.classList.toggle('active', (i === 0 && mode === 'login') || (i === 1 && mode === 'register'));
+    });
+    document.getElementById('auth-submit-btn').textContent = mode === 'login' ? 'Login' : 'Register';
+    document.getElementById('auth-status').textContent = '';
+}
 
-ws.onclose = () => {
-    statusEl.textContent = '✗ Disconnected';
-    statusEl.className = 'status disconnected';
-    countdownEl.textContent = '';
-};
+async function submitAuth() {
+    const username = document.getElementById('auth-username').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const statusEl2 = document.getElementById('auth-status');
+    if (!username || !password) {
+        statusEl2.className = 'auth-status err';
+        statusEl2.textContent = '✗ Username and password required';
+        return;
+    }
+    const endpoint = currentAuthMode === 'login' ? '/auth/login' : '/auth/register';
+    try {
+        const resp = await fetch(API + endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            statusEl2.className = 'auth-status err';
+            statusEl2.textContent = '✗ ' + (data.error || 'Request failed');
+            return;
+        }
+        authToken = data.token;
+        authUsername = data.username;
+        localStorage.setItem('iicpc_token', authToken);
+        localStorage.setItem('iicpc_username', authUsername);
+        statusEl2.className = 'auth-status ok';
+        statusEl2.textContent = `✓ ${currentAuthMode === 'login' ? 'Logged in' : 'Account created'} as ${authUsername}`;
+        refreshAuthUI();
+    } catch (err) {
+        statusEl2.className = 'auth-status err';
+        statusEl2.textContent = '✗ Could not reach server';
+    }
+}
+
+function logout() {
+    authToken = '';
+    authUsername = '';
+    localStorage.removeItem('iicpc_token');
+    localStorage.removeItem('iicpc_username');
+    refreshAuthUI();
+}
+
+// ── Binary validation ─────────────────────────────────────────────────────────
+// Reads the first 5 bytes of the file and checks the ELF magic + architecture.
+// ELF magic: 0x7f 'E' 'L' 'F'
+// e_machine offset 18-19: 0x3e 0x00 = x86-64 (little-endian)
+async function validateELF(file) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const bytes = new Uint8Array(e.target.result);
+            // Check ELF magic bytes
+            if (bytes[0] !== 0x7f || bytes[1] !== 0x45 || bytes[2] !== 0x4c || bytes[3] !== 0x46) {
+                resolve({ ok: false, reason: 'Not an ELF binary. Upload a compiled Linux executable.' });
+                return;
+            }
+            // EI_CLASS: byte 4 — 2 = 64-bit
+            if (bytes[4] !== 2) {
+                resolve({ ok: false, reason: 'ELF is 32-bit. Upload a Linux x86-64 (64-bit) binary.' });
+                return;
+            }
+            // e_machine: bytes 18-19 (little-endian) — 0x3e = x86-64
+            if (bytes[18] !== 0x3e) {
+                resolve({ ok: false, reason: `Wrong architecture (e_machine=0x${bytes[18].toString(16)}). Need Linux x86-64.` });
+                return;
+            }
+            resolve({ ok: true });
+        };
+        // Read only first 20 bytes — enough for ELF header check
+        reader.readAsArrayBuffer(file.slice(0, 20));
+    });
+}
 
 function updateFileName(input) {
     document.getElementById('file-name').textContent =
-        input.files[0] ? input.files[0].name : 'Choose Linux binary...';
+        input.files[0] ? input.files[0].name : 'Choose Linux x86-64 binary...';
 }
 
+// ── Upload + progress polling ─────────────────────────────────────────────────
 async function submitBinary() {
-    const contestantID = document.getElementById('contestant-id').value.trim();
-    const mode = document.getElementById('test-mode').value;
-    const fileInput = document.getElementById('binary-upload');
     const statusEl2 = document.getElementById('upload-status');
     const btn = document.querySelector('.upload-btn');
 
-    if (!contestantID) {
+    if (!authToken) {
         statusEl2.className = 'upload-status error';
-        statusEl2.textContent = '✗ Please enter a contestant ID';
+        statusEl2.textContent = '✗ Please log in first';
         return;
     }
+
+    const contestantID = document.getElementById('contestant-id').value.trim() || authUsername;
+    const mode = document.getElementById('test-mode').value;
+    const fileInput = document.getElementById('binary-upload');
+
     if (!fileInput.files[0]) {
         statusEl2.className = 'upload-status error';
         statusEl2.textContent = '✗ Please select a binary file';
         return;
     }
 
-    btn.disabled = true;
+    // Validate ELF before uploading
     statusEl2.className = 'upload-status running';
+    statusEl2.textContent = '🔍 Validating binary format...';
+    const validation = await validateELF(fileInput.files[0]);
+    if (!validation.ok) {
+        statusEl2.className = 'upload-status error';
+        statusEl2.textContent = '✗ ' + validation.reason;
+        return;
+    }
+
+    btn.disabled = true;
     statusEl2.textContent = '⏳ Uploading and containerizing...';
 
     const formData = new FormData();
@@ -191,15 +543,25 @@ async function submitBinary() {
     formData.append('test_mode', mode);
 
     try {
-        const resp = await fetch('http://localhost:8081/upload', {
+        const resp = await fetch(API + '/upload', {
             method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + authToken },
             body: formData
         });
         const data = await resp.json();
 
+        if (!resp.ok) {
+            statusEl2.className = 'upload-status error';
+            statusEl2.textContent = '✗ ' + (data.error || 'Upload failed');
+            btn.disabled = false;
+            return;
+        }
+
         if (data.status === 'running') {
             statusEl2.className = 'upload-status success';
-            statusEl2.textContent = `✓ Engine containerized! Stress test starting automatically... watch the leaderboard for "${contestantID}"`;
+            statusEl2.textContent = `✓ Engine containerized! Stress test starting — watch the leaderboard for "${contestantID}"`;
+            activeContestantID = contestantID;
+            startProgressPolling(contestantID);
         } else {
             statusEl2.className = 'upload-status error';
             statusEl2.textContent = '✗ Upload failed: ' + (data.error || 'unknown error');
@@ -212,32 +574,82 @@ async function submitBinary() {
     btn.disabled = false;
 }
 
-function colorByLatency(ms) {
-    if (ms <= 50) return '#3fb950';
-    if (ms <= 200) return '#d29922';
-    return '#f85149';
+// ── Live progress polling ─────────────────────────────────────────────────────
+const waveLabels = ['Limit Orders', 'Market Orders', 'Cancel Orders', 'Mixed Sustained', 'Chaos Testing'];
+
+function startProgressPolling(contestantID) {
+    clearInterval(progressPoller);
+    document.getElementById('progress-section').style.display = 'block';
+    renderProgressPlaceholders();
+
+    progressPoller = setInterval(async () => {
+        try {
+            const resp = await fetch(`${API}/progress/${contestantID}`);
+            const waves = await resp.json();
+            renderProgressWaves(waves);
+
+            // Stop polling once all 5 waves are done
+            if (waves && waves.length > 0 && waves[waves.length - 1].done) {
+                clearInterval(progressPoller);
+                document.getElementById('upload-status').textContent += ' — scoring complete, leaderboard updated!';
+            }
+        } catch (_) {}
+    }, 1500);
 }
 
-function colorClass(ms) {
-    if (ms <= 50) return 'good';
-    if (ms <= 200) return 'warn';
-    return 'bad';
+function renderProgressPlaceholders() {
+    const container = document.getElementById('waves-progress');
+    container.innerHTML = waveLabels.map((label, i) => `
+        <div class="wave-pill" id="wave-pill-${i+1}">
+            <div class="wave-pill-label">W${i+1} ${label}</div>
+            <div class="wave-pill-bar-bg">
+                <div class="wave-pill-bar" id="wave-bar-${i+1}" style="width:0%;background:#21262d"></div>
+            </div>
+            <div class="wave-pill-p99" id="wave-p99-${i+1}" style="color:#8b949e">pending</div>
+        </div>`).join('');
 }
 
-function scoreColorClass(s) {
-    if (s > 50) return 'good';
-    if (s > 20) return 'warn';
-    return 'bad';
+function renderProgressWaves(waves) {
+    if (!waves || !waves.length) return;
+    const maxP99 = Math.max(...waves.map(w => w.p99_ms || 0), 1);
+    waves.forEach(w => {
+        const bar = document.getElementById(`wave-bar-${w.wave_num}`);
+        const label = document.getElementById(`wave-p99-${w.wave_num}`);
+        if (!bar || !label) return;
+        const pct = Math.min((w.p99_ms / maxP99) * 100, 100);
+        const color = w.p99_ms <= 50 ? '#3fb950' : w.p99_ms <= 200 ? '#d29922' : '#f85149';
+        bar.style.width = pct + '%';
+        bar.style.background = color;
+        label.style.color = color;
+        label.textContent = `p99 ${w.p99_ms?.toFixed(0)}ms  SR ${w.success_rate?.toFixed(0)}%`;
+    });
 }
 
-function scoreBarColor(s) {
-    if (s > 50) return '#3fb950';
-    if (s > 20) return '#d29922';
-    return '#f85149';
-}
+// ── WebSocket + leaderboard ───────────────────────────────────────────────────
+setInterval(() => {
+    if (statusEl.className.includes('connected')) {
+        countdownEl.textContent = `updating in ${countdownVal}s`;
+        countdownVal = countdownVal <= 1 ? 3 : countdownVal - 1;
+    }
+}, 1000);
+
+ws.onopen = () => {
+    statusEl.textContent = '✓ Connected — live updates every 3 seconds';
+    statusEl.className = 'status connected';
+};
+ws.onclose = () => {
+    statusEl.textContent = '✗ Disconnected';
+    statusEl.className = 'status disconnected';
+    countdownEl.textContent = '';
+};
+
+function colorByLatency(ms) { return ms <= 50 ? '#3fb950' : ms <= 200 ? '#d29922' : '#f85149'; }
+function colorClass(ms) { return ms <= 50 ? 'good' : ms <= 200 ? 'warn' : 'bad'; }
+function scoreColorClass(s) { return s > 50 ? 'good' : s > 20 ? 'warn' : 'bad'; }
+function scoreBarColor(s) { return s > 50 ? '#3fb950' : s > 20 ? '#d29922' : '#f85149'; }
 
 function getBreakingBadge(waves) {
-    if (!waves || !waves.length) return '<span class="breaking-badge badge-stable">✓ stable</span>';
+    if (!waves?.length) return '<span class="breaking-badge badge-stable">✓ stable</span>';
     const max = Math.max(...waves.map(w => w.p99_ms || 0));
     if (max >= 200) return '<span class="breaking-badge badge-bad">✗ breaks under load</span>';
     if (max >= 50) return '<span class="breaking-badge badge-warn">⚠ degrades under load</span>';
@@ -245,12 +657,11 @@ function getBreakingBadge(waves) {
 }
 
 function renderWaveChart(canvasId, waves) {
-    if (!waves || !waves.length) return;
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
+    if (!waves?.length) return;
+    const ctx2 = document.getElementById(canvasId);
+    if (!ctx2) return;
     if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
-
-    chartInstances[canvasId] = new Chart(ctx, {
+    chartInstances[canvasId] = new Chart(ctx2, {
         type: 'bar',
         data: {
             labels: waves.map(w => w.label || `Wave ${w.wave_num}`),
@@ -271,13 +682,11 @@ function renderWaveChart(canvasId, waves) {
 }
 
 function renderHistogram(waves) {
-    if (!waves || !waves.length) return '';
+    if (!waves?.length) return '';
     const buckets = [
-        { label: '0-10ms', check: v => v <= 10 },
-        { label: '10-50ms', check: v => v > 10 && v <= 50 },
-        { label: '50-100ms', check: v => v > 50 && v <= 100 },
-        { label: '100-250ms', check: v => v > 100 && v <= 250 },
-        { label: '250ms+', check: v => v > 250 },
+        { label: '0-10ms', check: v => v <= 10 }, { label: '10-50ms', check: v => v > 10 && v <= 50 },
+        { label: '50-100ms', check: v => v > 50 && v <= 100 }, { label: '100-250ms', check: v => v > 100 && v <= 250 },
+        { label: '250ms+', check: v => v > 250 }
     ];
     const p99s = waves.map(w => w.p99_ms || 0);
     const total = p99s.length;
@@ -285,7 +694,7 @@ function renderHistogram(waves) {
         const count = p99s.filter(b.check).length;
         const pct = total > 0 ? (count / total) * 100 : 0;
         const color = b.label.includes('0-10') || b.label.includes('10-50') ? '#3fb950' : b.label.includes('50-100') ? '#d29922' : '#f85149';
-        return `<div class="hist-row"><span class="hist-label">${b.label}</span><div class="hist-bar-bg"><div class="hist-bar" style="width:${pct * 2}%;background:${color}"></div></div><span class="hist-pct">${pct.toFixed(0)}%</span></div>`;
+        return `<div class="hist-row"><span class="hist-label">${b.label}</span><div class="hist-bar-bg"><div class="hist-bar" style="width:${pct*2}%;background:${color}"></div></div><span class="hist-pct">${pct.toFixed(0)}%</span></div>`;
     }).join('');
     return `<div class="hist-section"><div class="hist-title">P99 Distribution across waves</div>${rows}</div>`;
 }
@@ -300,11 +709,8 @@ function updateHistoryChart(data) {
     const colors = ['#58a6ff', '#3fb950', '#f85149', '#d29922', '#a371f7'];
     const allTimes = [...new Set(Object.values(scoreHistory).flat().map(p => p.time))].slice(-20);
     const datasets = Object.entries(scoreHistory).map(([id, points], i) => ({
-        label: id,
-        data: allTimes.map(t => { const p = points.find(x => x.time === t); return p ? p.score : null; }),
-        borderColor: colors[i % colors.length],
-        backgroundColor: 'transparent',
-        tension: 0.3, spanGaps: true, pointRadius: 3,
+        label: id, data: allTimes.map(t => { const p = points.find(x => x.time === t); return p ? p.score : null; }),
+        borderColor: colors[i % colors.length], backgroundColor: 'transparent', tension: 0.3, spanGaps: true, pointRadius: 3
     }));
     if (!historyChart) {
         historyChart = new Chart(document.getElementById('history-chart'), {
@@ -328,17 +734,18 @@ function updateHistoryChart(data) {
 
 function updateStatsBar(data) {
     const scores = data.map(c => c.overall_score || 0);
-    const p99s = data.map(c => c.overall_p99 || 0);
+    const p99s = data.map(c => c.overall_p99 || 0).filter(v => v > 0);
     document.getElementById('stat-contestants').textContent = data.length;
-    document.getElementById('stat-best-score').textContent = Math.max(...scores).toFixed(1);
-    document.getElementById('stat-best-p99').textContent = Math.min(...p99s).toFixed(0) + 'ms';
-    document.getElementById('stat-avg-score').textContent = (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1);
+    document.getElementById('stat-best-score').textContent = scores.length ? Math.max(...scores).toFixed(1) : '-';
+    document.getElementById('stat-best-p99').textContent = p99s.length ? Math.min(...p99s).toFixed(0) + 'ms' : '-';
+    const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    document.getElementById('stat-avg-score').textContent = avg ? avg.toFixed(1) : '-';
 }
 
 ws.onmessage = function(event) {
     countdownVal = 3;
     const data = JSON.parse(event.data);
-    if (!data || !data.length) {
+    if (!data?.length) {
         grid.innerHTML = '<p style="color:#8b949e">No contestants yet — upload your binary above to get started!</p>';
         return;
     }
@@ -347,20 +754,21 @@ ws.onmessage = function(event) {
     const maxScore = Math.max(...data.map(c => c.overall_score || 0));
     grid.innerHTML = '';
     data.forEach((c, index) => {
-        const rankClass = index < 3 ? `rank-${index + 1}` : '';
+        const rankClass = index < 3 ? `rank-${index+1}` : '';
         const sc = c.overall_score || 0;
         const scoreBarWidth = maxScore > 0 ? (sc / maxScore) * 100 : 0;
         const chartId = `chart-${index}`;
+        const displayName = c.username ? `${c.username} <span style="color:#8b949e;font-size:0.75rem">(${c.contestant_id})</span>` : c.contestant_id;
         const waveRows = (c.waves || []).map(w => `
             <tr>
                 <td>${w.label || 'Wave ' + w.wave_num}</td>
-                <td class="${colorClass(w.p50_ms)}">${w.p50_ms || 0}ms</td>
-                <td class="${colorClass(w.p90_ms)}">${w.p90_ms || 0}ms</td>
-                <td class="${colorClass(w.p99_ms)}">${w.p99_ms || 0}ms</td>
-                <td class="${colorClass(w.p999_ms)}">${w.p999_ms || 0}ms</td>
-                <td class="${(w.success_rate || 0) >= 99 ? 'good' : (w.success_rate || 0) >= 95 ? 'warn' : 'bad'}">${(w.success_rate || 0).toFixed(1)}%</td>
-                <td class="${(w.correctness || 0) >= 99 ? 'good' : (w.correctness || 0) >= 95 ? 'warn' : 'bad'}">${(w.correctness || 0).toFixed(1)}%</td>
-                <td class="${(w.score || 0) > 30 ? 'good' : (w.score || 0) > 10 ? 'warn' : 'bad'}">${(w.score || 0).toFixed(2)}</td>
+                <td class="${colorClass(w.p50_ms)}">${w.p50_ms||0}ms</td>
+                <td class="${colorClass(w.p90_ms)}">${w.p90_ms||0}ms</td>
+                <td class="${colorClass(w.p99_ms)}">${w.p99_ms||0}ms</td>
+                <td class="${colorClass(w.p999_ms)}">${w.p999_ms||0}ms</td>
+                <td class="${(w.success_rate||0)>=99?'good':(w.success_rate||0)>=95?'warn':'bad'}">${(w.success_rate||0).toFixed(1)}%</td>
+                <td class="${(w.correctness||0)>=99?'good':(w.correctness||0)>=95?'warn':'bad'}">${(w.correctness||0).toFixed(1)}%</td>
+                <td class="${(w.score||0)>30?'good':(w.score||0)>10?'warn':'bad'}">${(w.score||0).toFixed(2)}</td>
             </tr>`).join('');
         const waveTable = c.waves?.length ? `
             <table class="wave-table">
@@ -371,15 +779,15 @@ ws.onmessage = function(event) {
         card.className = `contestant-card ${rankClass}`;
         card.innerHTML = `
             <div class="card-header">
-                <div class="card-rank">#${index + 1}</div>
-                <div class="card-name">${c.contestant_id}</div>
+                <div class="card-rank">#${index+1}</div>
+                <div class="card-name">${displayName}</div>
                 <div class="card-score ${scoreColorClass(sc)}">${sc.toFixed(2)}</div>
             </div>
             <div class="score-bar-bg"><div class="score-bar" style="width:${scoreBarWidth}%;background:${scoreBarColor(sc)}"></div></div>
             <div class="card-metrics">
-                <div class="metric"><div class="metric-value ${colorClass(c.overall_p99)}">${(c.overall_p99 || 0).toFixed(0)}ms</div><div class="metric-label">Overall P99</div></div>
-                <div class="metric"><div class="metric-value ${(c.overall_success_rate || 0) >= 99 ? 'good' : 'warn'}">${(c.overall_success_rate || 0).toFixed(1)}%</div><div class="metric-label">Success Rate</div></div>
-                <div class="metric"><div class="metric-value good">${(c.waves?.length || 0) * 160}</div><div class="metric-label">Orders Tested</div></div>
+                <div class="metric"><div class="metric-value ${colorClass(c.overall_p99)}">${(c.overall_p99||0).toFixed(0)}ms</div><div class="metric-label">Overall P99</div></div>
+                <div class="metric"><div class="metric-value ${(c.overall_success_rate||0)>=99?'good':'warn'}">${(c.overall_success_rate||0).toFixed(1)}%</div><div class="metric-label">Success Rate</div></div>
+                <div class="metric"><div class="metric-value good">${(c.waves?.length||0)*160}</div><div class="metric-label">Orders Tested</div></div>
             </div>
             ${getBreakingBadge(c.waves)}
             <div class="chart-container"><canvas id="${chartId}"></canvas></div>
@@ -398,10 +806,13 @@ ws.onmessage = function(event) {
 };
 
 function toggleWaves(index) {
-    if (expandedRows.has(index)) { expandedRows.delete(index); } else { expandedRows.add(index); }
+    if (expandedRows.has(index)) expandedRows.delete(index); else expandedRows.add(index);
     const el = document.getElementById(`waves-${index}`);
     if (el) el.style.display = expandedRows.has(index) ? 'block' : 'none';
 }
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+refreshAuthUI();
 </script>
 </body>
 </html>

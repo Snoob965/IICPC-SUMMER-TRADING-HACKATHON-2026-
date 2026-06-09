@@ -2,3 +2,5 @@
 platform.zip
 sandbox/uploads/*.zip
 sandbox/uploads/*.binary
+sandbox/uploads/*.zip
+sandbox/uploads/*.binary
