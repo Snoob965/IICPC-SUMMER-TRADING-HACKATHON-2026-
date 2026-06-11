@@ -68,7 +68,7 @@ func percentile(latencies []float64, p float64) float64 {
 // short-runs (chaos wave, partial bot fleet, etc.).
 func consumeFromRedpanda(topic string, expectedCount int, timeout time.Duration) []Result {
 	client, err := kgo.NewClient(
-		kgo.SeedBrokers("localhost:9092"),
+		kgo.SeedBrokers("localhost:19092"),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 	)
@@ -168,7 +168,7 @@ func scoreWave(results []Result, waveNum int, label string) WaveScore {
 	tps := computeTPS(results)
 	p99Factor := 1000.0 / (float64(p99) + 1.0)
 	p999Factor := 1000.0 / (float64(p999) + 1.0)
-	score := p99Factor * p999Factor * successRate * correctness
+	score := p99Factor * p999Factor * (successRate / 100.0) * (correctness / 100.0)
 
 	return WaveScore{
 		WaveNum:     waveNum,
@@ -324,12 +324,29 @@ func repeatChar(c string, n int) string {
 
 func pushLeaderboard(rdb *redis.Client, final FinalScore) {
 	data, _ := json.Marshal(final)
+
+	// Push to leaderboard sorted set and scores hash
 	rdb.HSet(ctx, "leaderboard:scores", final.ContestantID, data)
 	rdb.ZAdd(ctx, "leaderboard:ranking", redis.Z{
 		Score:  final.OverallScore,
 		Member: final.ContestantID,
 	})
-	fmt.Printf("\nScore pushed to leaderboard for %s\n", final.ContestantID)
+
+	// Update score history — replace the placeholder entry pushed at upload time
+	// with the real scored result so /history/{id} returns accurate data.
+	histEntry := map[string]interface{}{
+		"timestamp":    time.Now().Unix(),
+		"overall_score": final.OverallScore,
+		"overall_p99":   final.OverallP99,
+		"overall_sr":    final.OverallSR,
+		"waves":         final.Waves,
+	}
+	histJSON, _ := json.Marshal(histEntry)
+	histKey := fmt.Sprintf("leaderboard:history:%s", final.ContestantID)
+	// Replace the placeholder (index 0 = most recent) with real data
+	rdb.LSet(ctx, histKey, 0, histJSON)
+
+	fmt.Printf("\nScore pushed to leaderboard for %s — overall: %.4f\n", final.ContestantID, final.OverallScore)
 }
 
 func printFinalScore(final FinalScore) {

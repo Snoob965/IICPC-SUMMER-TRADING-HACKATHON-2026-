@@ -41,6 +41,34 @@
 
         /* ── Upload ── */
 
+
+
+        /* ── Running card ── */
+        .contestant-card.running { border-color: #d29922; animation: pulse-border 2s infinite; }
+        @keyframes pulse-border { 50% { border-color: #58a6ff; } }
+        .running-badge { display:inline-flex; align-items:center; gap:6px; font-size:0.75rem; color:#d29922; margin-bottom:10px; }
+        .running-dot { width:8px; height:8px; border-radius:50%; background:#d29922; animation:blink 1s infinite; }
+        .live-wave-row { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+        .live-wave-chip { font-size:0.68rem; padding:3px 8px; border-radius:10px; background:#21262d; color:#8b949e; }
+        .live-wave-chip.done { background:#1a3a1a; color:#3fb950; }
+        .live-wave-chip.pending { background:#21262d; color:#8b949e; }
+
+        /* ── My Runs tab ── */
+        .main-tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 1px solid #30363d; }
+        .main-tab { padding: 10px 24px; font-size: 13px; cursor: pointer; background: none; border: none; color: #8b949e; font-family: 'Courier New', monospace; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .15s; }
+        .main-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+        .main-tab:hover:not(.active) { color: #c9d1d9; }
+        .main-panel { display: none; }
+        .main-panel.active { display: block; }
+        .runs-empty { color: #8b949e; font-size: 0.85rem; padding: 20px 0; }
+        .run-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: center; gap: 16px; }
+        .run-num { font-size: 1.4rem; font-weight: bold; color: #8b949e; width: 32px; }
+        .run-score { font-size: 1.3rem; font-weight: bold; }
+        .run-meta { flex: 1; font-size: 0.78rem; color: #8b949e; }
+        .run-meta b { color: #c9d1d9; }
+        .run-waves { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+        .run-wave-pill { font-size: 0.68rem; padding: 2px 8px; border-radius: 10px; background: #21262d; color: #8b949e; }
+
         /* ── How to submit guide ── */
         .guide-section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 24px; overflow: hidden; }
         .guide-toggle { width: 100%; padding: 14px 20px; background: none; border: none; color: #58a6ff; font-family: 'Courier New', monospace; font-size: 0.95rem; text-align: left; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
@@ -351,6 +379,13 @@ The platform will:
     </div>
 </div>
 
+<!-- ── Main tabs ─────────────────────────────────────────────────────────────── -->
+<div class="main-tabs">
+    <button class="main-tab active" onclick="switchMainTab('leaderboard', this)">🏆 Leaderboard</button>
+    <button class="main-tab" onclick="switchMainTab('myruns', this); loadMyRuns()">📊 My Runs</button>
+</div>
+
+<div class="main-panel active" id="panel-leaderboard">
 <div class="stats-bar">
     <div class="stat-item"><div class="stat-value" id="stat-contestants">0</div><div class="stat-label">Contestants</div></div>
     <div class="stat-item"><div class="stat-value" id="stat-best-score">-</div><div class="stat-label">Best Score</div></div>
@@ -359,6 +394,12 @@ The platform will:
 </div>
 
 <div class="cards-grid" id="cards-grid"></div>
+
+</div><!-- end panel-leaderboard -->
+
+<div class="main-panel" id="panel-myruns">
+    <div id="my-runs-container"><p class="runs-empty">Log in and run a test to see your history here.</p></div>
+</div>
 
 <div class="history-section">
     <div class="history-title">Score History</div>
@@ -381,6 +422,57 @@ function switchLang(lang, tab) {
     document.querySelectorAll('.lang-block').forEach(b => b.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('lang-' + lang).classList.add('active');
+}
+
+
+// ── Main tab switcher ─────────────────────────────────────────────────────────
+function switchMainTab(tab, btn) {
+    document.querySelectorAll('.main-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.main-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-' + tab).classList.add('active');
+}
+
+// ── My Runs ───────────────────────────────────────────────────────────────────
+async function loadMyRuns() {
+    const container = document.getElementById('my-runs-container');
+    if (!authUsername) {
+        container.innerHTML = '<p class="runs-empty">Log in first to see your run history.</p>';
+        return;
+    }
+    const contestantID = document.getElementById('contestant-id').value.trim() || authUsername;
+    container.innerHTML = '<p class="runs-empty">Loading...</p>';
+    try {
+        const resp = await fetch(`${API}/history/${contestantID}`);
+        const runs = await resp.json();
+        if (!runs || runs.length === 0) {
+            container.innerHTML = '<p class="runs-empty">No runs yet for "' + contestantID + '" — upload your binary and run a stress test first.</p>';
+            return;
+        }
+        container.innerHTML = runs.map((run, i) => {
+            const date = new Date(run.timestamp * 1000).toLocaleString();
+            const score = run.overall_score?.toFixed(2) || '—';
+            const p99 = run.overall_p99?.toFixed(0) || '—';
+            const sr = run.overall_sr?.toFixed(1) || '—';
+            const scoreColor = (run.overall_score || 0) > 50 ? '#3fb950' : (run.overall_score || 0) > 20 ? '#d29922' : '#f85149';
+            const wavePills = (run.waves || []).map(w =>
+                `<span class="run-wave-pill">W${w.wave_num} p99:${(w.p99_ms||0).toFixed(0)}ms</span>`
+            ).join('');
+            return `
+            <div class="run-card">
+                <div class="run-num">#${i + 1}</div>
+                <div style="flex:1">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
+                        <span class="run-score" style="color:${scoreColor}">${score}</span>
+                        <span class="run-meta"><b>p99</b> ${p99}ms &nbsp;·&nbsp; <b>SR</b> ${sr}% &nbsp;·&nbsp; ${date}</span>
+                    </div>
+                    <div class="run-waves">${wavePills || '<span class="run-wave-pill">no wave data yet</span>'}</div>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        container.innerHTML = '<p class="runs-empty">Could not load history: ' + err.message + '</p>';
+    }
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -776,8 +868,41 @@ ws.onmessage = function(event) {
                 <tbody>${waveRows}</tbody>
             </table>` : '';
         const card = document.createElement('div');
-        card.className = `contestant-card ${rankClass}`;
-        card.innerHTML = `
+        const isRunning = c.status === 'running';
+        card.className = `contestant-card ${rankClass} ${isRunning ? 'running' : ''}`;
+
+        if (isRunning) {
+            // Fetch live wave progress for this contestant
+            const progressKey = c.contestant_id;
+            fetch(`${API}/progress/${progressKey}`)
+                .then(r => r.json())
+                .then(waves => {
+                    const waveNames = ['Limit', 'Market', 'Cancel', 'Mixed', 'Chaos'];
+                    const chips = waveNames.map((name, i) => {
+                        const w = waves && waves.find(x => x.wave_num === i+1);
+                        if (w) return `<span class="live-wave-chip done">W${i+1} ${name} p99:${(w.p99_ms||0).toFixed(0)}ms</span>`;
+                        return `<span class="live-wave-chip pending">W${i+1} ${name} pending</span>`;
+                    }).join('');
+                    const liveEl = document.getElementById(`live-waves-${index}`);
+                    if (liveEl) liveEl.innerHTML = chips;
+                }).catch(() => {});
+
+            card.innerHTML = `
+                <div class="card-header">
+                    <div class="card-rank">#${index+1}</div>
+                    <div class="card-name">${displayName}</div>
+                    <div class="card-score warn">—</div>
+                </div>
+                <div class="running-badge"><span class="running-dot"></span> Test in progress...</div>
+                <div class="live-wave-row" id="live-waves-${index}">
+                    <span class="live-wave-chip pending">W1 Limit pending</span>
+                    <span class="live-wave-chip pending">W2 Market pending</span>
+                    <span class="live-wave-chip pending">W3 Cancel pending</span>
+                    <span class="live-wave-chip pending">W4 Mixed pending</span>
+                    <span class="live-wave-chip pending">W5 Chaos pending</span>
+                </div>`;
+        } else {
+            card.innerHTML = `
             <div class="card-header">
                 <div class="card-rank">#${index+1}</div>
                 <div class="card-name">${displayName}</div>
@@ -796,6 +921,7 @@ ws.onmessage = function(event) {
                 ${waveTable}
                 ${renderHistogram(c.waves)}
             </div>`;
+        }
         grid.appendChild(card);
     });
     data.forEach((c, index) => renderWaveChart(`chart-${index}`, c.waves));

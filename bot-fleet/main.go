@@ -331,7 +331,7 @@ func runChaosWave(waveNum int, targetURL string, contestantID string, maxBots in
 }
 
 func pushToRedpanda(results []Result, topic string) {
-	client, err := kgo.NewClient(kgo.SeedBrokers("localhost:9092"))
+	client, err := kgo.NewClient(kgo.SeedBrokers("localhost:19092"))
 	if err != nil {
 		fmt.Println("Redpanda connection error:", err)
 		return
