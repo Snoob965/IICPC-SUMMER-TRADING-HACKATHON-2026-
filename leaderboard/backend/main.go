@@ -224,16 +224,41 @@ func getLeaderboardData() ([]ContestantEntry, error) {
 		if err != nil {
 			continue
 		}
-		var entry ContestantEntry
-		json.Unmarshal([]byte(dataStr), &entry)
-		entry.ContestantID = contestantID
-		entry.OverallScore = z.Score
-		entry.Rank = i + 1
 
-		// Attach username if contestant registered one
+		// Parse the full FinalScore JSON from telemetry.
+		// Use a flexible map so we handle both FinalScore and ContestantEntry shapes.
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(dataStr), &raw); err != nil {
+			continue
+		}
+
+		entry := ContestantEntry{
+			ContestantID: contestantID,
+			OverallScore: z.Score,
+			Rank:         i + 1,
+		}
+
+		// Extract overall_p99, overall_p999, overall_success_rate
+		if v, ok := raw["overall_p99"]; ok {
+			json.Unmarshal(v, &entry.OverallP99)
+		}
+		if v, ok := raw["overall_p999"]; ok {
+			json.Unmarshal(v, &entry.OverallP999)
+		}
+		if v, ok := raw["overall_success_rate"]; ok {
+			json.Unmarshal(v, &entry.OverallSR)
+		}
+
+		// Extract waves array
+		if v, ok := raw["waves"]; ok {
+			json.Unmarshal(v, &entry.Waves)
+		}
+
+		// Attach username if registered
 		if uname, err := rdb.HGet(ctx, "contestant:"+contestantID+":meta", "username").Result(); err == nil {
 			entry.Username = uname
 		}
+
 		leaderboard = append(leaderboard, entry)
 	}
 	return leaderboard, nil

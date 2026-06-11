@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -43,21 +44,26 @@ func runBotFleet(contestantID string, mode string) {
 
 	topic := topicName(contestantID)
 
-	cmd := exec.Command("go", "run", "main.go",
+	// Use pre-built binary (./botfleet_bin) — avoids go run compile delay on every run.
+	// Build it once with: cd ../bot-fleet && go build -o ../orchestrator/botfleet_bin .
+	cmd := exec.Command("./botfleet_bin",
 		"--mode", mode,
 		"--bots", "100",
 		"--contestant", contestantID,
 		"--topic", topic,
 	)
-	cmd.Dir = "../bot-fleet"
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("[Orchestrator] Bot fleet error: %v\n%s\n", err, string(output))
-		return
+	cmd.Dir = "."
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// Log the error but continue to telemetry anyway —
+		// bot fleet may exit non-zero even after completing all waves.
+		fmt.Printf("[Orchestrator] Bot fleet exited with: %v — proceeding to telemetry\n", err)
+	} else {
+		fmt.Printf("[Orchestrator] Bot fleet complete for %s\n", contestantID)
 	}
-	fmt.Printf("[Orchestrator] Bot fleet complete for %s\n", contestantID)
 
-	// Expected result counts per mode — must match what bot-fleet actually sends
+	// Expected result counts per mode
 	expected := 690
 	if mode == "standard" {
 		expected = 1600
@@ -71,21 +77,23 @@ func runBotFleet(contestantID string, mode string) {
 func runTelemetry(contestantID string, expected int, topic string) {
 	fmt.Printf("[Orchestrator] Running telemetry for %s (topic: %s)\n", contestantID, topic)
 
-	cmd := exec.Command("go", "run", "main.go",
+	// Use pre-built binary (./telemetry_bin) — avoids go run compile delay.
+	// Build it once with: cd ../telemetry && go build -o ../orchestrator/telemetry_bin .
+	cmd := exec.Command("./telemetry_bin",
 		"--expected", fmt.Sprintf("%d", expected),
 		"--contestant", contestantID,
 		"--maxbots", "100",
 		"--topic", topic,
 		"--timeout", "300",
 	)
-	cmd.Dir = "../telemetry"
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("[Orchestrator] Telemetry error: %v\n%s\n", err, string(output))
+	cmd.Dir = "."
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("[Orchestrator] Telemetry error: %v\n", err)
 		return
 	}
 	fmt.Printf("[Orchestrator] Scoring complete for %s\n", contestantID)
-	fmt.Println(string(output))
 }
 
 // reaperTTL is how long a contestant container is allowed to run before the

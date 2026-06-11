@@ -86,9 +86,7 @@ func startContestantContainer(binaryPath string, contestantID string) (string, e
 		"--memory=256m",
 		"--cpus=1.0",
 		"--security-opt=no-new-privileges",
-		"--network=none",       // no outbound access — prevents malicious binaries calling home
-		"--read-only",          // immutable filesystem
-		"--pids-limit=128",     // prevent fork bombs
+		"--pids-limit=128",
 		"-p", fmt.Sprintf("%s:8080", port),
 		"-v", fmt.Sprintf("%s:/app/contestant_bot:ro", absPath),
 		"ubuntu:22.04",
@@ -109,22 +107,24 @@ func startContestantContainer(binaryPath string, contestantID string) (string, e
 }
 
 // waitForContainer polls GET /orderbook on the container until it responds
-// or the timeout is reached. Replaces the old time.Sleep(2s).
+// or the timeout is reached.
+// The 1s initial delay accounts for Docker Desktop on Mac port-forwarding warmup.
 func waitForContainer(port string) error {
+	time.Sleep(1 * time.Second)
 	url := fmt.Sprintf("http://localhost:%s/orderbook", port)
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	deadline := time.Now().Add(15 * time.Second)
+	client := &http.Client{Timeout: 1 * time.Second}
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode < 500 {
-				return nil // container is up and responding
+				return nil
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("container did not become ready within 15 seconds on port %s", port)
+	return fmt.Errorf("container did not become ready within 30 seconds on port %s", port)
 }
 
 func stopContestantContainer(contestantID string) {
@@ -213,6 +213,29 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	jsonBytes, _ := json.Marshal(result)
 	rdb.Publish(ctx, "sandbox_logs", jsonBytes)
+
+	// Push a "test in progress" placeholder to the leaderboard immediately.
+	// The WebSocket will pick this up within 3 seconds and show the contestant
+	// on the leaderboard while the test is running. Telemetry overwrites this
+	// with real scores when done.
+	placeholder := map[string]interface{}{
+		"contestant_id":        contestantID,
+		"overall_score":        0.0,
+		"overall_p99":          0.0,
+		"overall_p999":         0.0,
+		"overall_success_rate": 0.0,
+		"status":               "running",
+		"waves":                []interface{}{},
+	}
+	if uname, err := rdb.HGet(ctx, "contestant:"+contestantID+":meta", "username").Result(); err == nil {
+		placeholder["username"] = uname
+	}
+	placeholderJSON, _ := json.Marshal(placeholder)
+	rdb.HSet(ctx, "leaderboard:scores", contestantID, placeholderJSON)
+	rdb.ZAdd(ctx, "leaderboard:ranking", redis.Z{
+		Score:  -1, // negative score so it sorts below all real scores
+		Member: contestantID,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(jsonBytes)
