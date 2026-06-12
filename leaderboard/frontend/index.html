@@ -39,10 +39,6 @@
         .logout-btn { background: none; border: 1px solid #30363d; color: #8b949e; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.78rem; font-family: 'Courier New', monospace; }
         .logout-btn:hover { border-color: #f85149; color: #f85149; }
 
-        /* ── Upload ── */
-
-
-
         /* ── Running card ── */
         .contestant-card.running { border-color: #d29922; animation: pulse-border 2s infinite; }
         @keyframes pulse-border { 50% { border-color: #58a6ff; } }
@@ -560,32 +556,25 @@ function logout() {
 }
 
 // ── Binary validation ─────────────────────────────────────────────────────────
-// Reads the first 5 bytes of the file and checks the ELF magic + architecture.
-// ELF magic: 0x7f 'E' 'L' 'F'
-// e_machine offset 18-19: 0x3e 0x00 = x86-64 (little-endian)
 async function validateELF(file) {
     return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = (e) => {
             const bytes = new Uint8Array(e.target.result);
-            // Check ELF magic bytes
             if (bytes[0] !== 0x7f || bytes[1] !== 0x45 || bytes[2] !== 0x4c || bytes[3] !== 0x46) {
                 resolve({ ok: false, reason: 'Not an ELF binary. Upload a compiled Linux executable.' });
                 return;
             }
-            // EI_CLASS: byte 4 — 2 = 64-bit
             if (bytes[4] !== 2) {
                 resolve({ ok: false, reason: 'ELF is 32-bit. Upload a Linux x86-64 (64-bit) binary.' });
                 return;
             }
-            // e_machine: bytes 18-19 (little-endian) — 0x3e = x86-64
             if (bytes[18] !== 0x3e) {
                 resolve({ ok: false, reason: `Wrong architecture (e_machine=0x${bytes[18].toString(16)}). Need Linux x86-64.` });
                 return;
             }
             resolve({ ok: true });
         };
-        // Read only first 20 bytes — enough for ELF header check
         reader.readAsArrayBuffer(file.slice(0, 20));
     });
 }
@@ -616,7 +605,6 @@ async function submitBinary() {
         return;
     }
 
-    // Validate ELF before uploading
     statusEl2.className = 'upload-status running';
     statusEl2.textContent = '🔍 Validating binary format...';
     const validation = await validateELF(fileInput.files[0]);
@@ -680,7 +668,6 @@ function startProgressPolling(contestantID) {
             const waves = await resp.json();
             renderProgressWaves(waves);
 
-            // Stop polling once all 5 waves are done
             if (waves && waves.length > 0 && waves[waves.length - 1].done) {
                 clearInterval(progressPoller);
                 document.getElementById('upload-status').textContent += ' — scoring complete, leaderboard updated!';
@@ -793,7 +780,8 @@ function renderHistogram(waves) {
 
 function updateHistoryChart(data) {
     const now = new Date().toLocaleTimeString();
-    data.forEach(c => {
+    // Only track finished contestants in the history chart
+    data.filter(c => c.status !== 'running').forEach(c => {
         if (!scoreHistory[c.contestant_id]) scoreHistory[c.contestant_id] = [];
         scoreHistory[c.contestant_id].push({ time: now, score: c.overall_score });
         if (scoreHistory[c.contestant_id].length > 20) scoreHistory[c.contestant_id].shift();
@@ -824,9 +812,12 @@ function updateHistoryChart(data) {
     }
 }
 
+// FIX: exclude running contestants from stats — their score is 0 and would
+// drag down the best-score and average displays.
 function updateStatsBar(data) {
-    const scores = data.map(c => c.overall_score || 0);
-    const p99s = data.map(c => c.overall_p99 || 0).filter(v => v > 0);
+    const finishedData = data.filter(c => c.status !== 'running');
+    const scores = finishedData.map(c => c.overall_score || 0);
+    const p99s = finishedData.map(c => c.overall_p99 || 0).filter(v => v > 0);
     document.getElementById('stat-contestants').textContent = data.length;
     document.getElementById('stat-best-score').textContent = scores.length ? Math.max(...scores).toFixed(1) : '-';
     document.getElementById('stat-best-p99').textContent = p99s.length ? Math.min(...p99s).toFixed(0) + 'ms' : '-';
@@ -843,7 +834,7 @@ ws.onmessage = function(event) {
     }
     updateStatsBar(data);
     updateHistoryChart(data);
-    const maxScore = Math.max(...data.map(c => c.overall_score || 0));
+    const maxScore = Math.max(...data.filter(c => c.status !== 'running').map(c => c.overall_score || 0), 1);
     grid.innerHTML = '';
     data.forEach((c, index) => {
         const rankClass = index < 3 ? `rank-${index+1}` : '';
@@ -872,28 +863,18 @@ ws.onmessage = function(event) {
         card.className = `contestant-card ${rankClass} ${isRunning ? 'running' : ''}`;
 
         if (isRunning) {
-            // Fetch live wave progress for this contestant
-            const progressKey = c.contestant_id;
-            fetch(`${API}/progress/${progressKey}`)
-                .then(r => r.json())
-                .then(waves => {
-                    const waveNames = ['Limit', 'Market', 'Cancel', 'Mixed', 'Chaos'];
-                    const chips = waveNames.map((name, i) => {
-                        const w = waves && waves.find(x => x.wave_num === i+1);
-                        if (w) return `<span class="live-wave-chip done">W${i+1} ${name} p99:${(w.p99_ms||0).toFixed(0)}ms</span>`;
-                        return `<span class="live-wave-chip pending">W${i+1} ${name} pending</span>`;
-                    }).join('');
-                    const liveEl = document.getElementById(`live-waves-${index}`);
-                    if (liveEl) liveEl.innerHTML = chips;
-                }).catch(() => {});
-
+            // FIX: set innerHTML FIRST so the live-waves-${index} element exists
+            // in the DOM before the fetch callback tries to update it.
+            // The WebSocket fires every 3 seconds, so this effectively refreshes
+            // the wave chips on every leaderboard tick automatically.
+            const liveScoreDisplay = sc > 0 ? `<span class="warn">${sc.toFixed(2)}</span>` : `<span style="color:#8b949e">—</span>`;
             card.innerHTML = `
                 <div class="card-header">
                     <div class="card-rank">#${index+1}</div>
                     <div class="card-name">${displayName}</div>
-                    <div class="card-score warn">—</div>
+                    <div class="card-score">${liveScoreDisplay}</div>
                 </div>
-                <div class="running-badge"><span class="running-dot"></span> Test in progress...</div>
+                <div class="running-badge"><span class="running-dot"></span> Test in progress... (live score)</div>
                 <div class="live-wave-row" id="live-waves-${index}">
                     <span class="live-wave-chip pending">W1 Limit pending</span>
                     <span class="live-wave-chip pending">W2 Market pending</span>
@@ -901,6 +882,20 @@ ws.onmessage = function(event) {
                     <span class="live-wave-chip pending">W4 Mixed pending</span>
                     <span class="live-wave-chip pending">W5 Chaos pending</span>
                 </div>`;
+
+            // FIX: fetch AFTER innerHTML is set so the target element exists.
+            fetch(`${API}/progress/${c.contestant_id}`)
+                .then(r => r.json())
+                .then(waves => {
+                    const waveNames = ['Limit', 'Market', 'Cancel', 'Mixed', 'Chaos'];
+                    const chips = waveNames.map((name, i) => {
+                        const w = waves && waves.find(x => x.wave_num === i+1);
+                        if (w) return `<span class="live-wave-chip done">W${i+1} ${name} p99:${(w.p99_ms||0).toFixed(0)}ms SR:${(w.success_rate||0).toFixed(0)}%</span>`;
+                        return `<span class="live-wave-chip pending">W${i+1} ${name} pending</span>`;
+                    }).join('');
+                    const liveEl = document.getElementById(`live-waves-${index}`);
+                    if (liveEl) liveEl.innerHTML = chips;
+                }).catch(() => {});
         } else {
             card.innerHTML = `
             <div class="card-header">
