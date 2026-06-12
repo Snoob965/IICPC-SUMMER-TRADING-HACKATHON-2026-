@@ -352,11 +352,8 @@ func pushToRedpanda(results []Result, topic string) {
 	fmt.Printf("\nPushed %d total results to Redpanda topic: %s\n", len(results), topic)
 }
 
-// pushWaveProgress writes a single wave's live stats to Redis immediately after
-// the wave finishes. The leaderboard frontend polls this key to show a progress
-// bar and per-wave scores during the test — no need to wait for full scoring.
-// Key: leaderboard:progress:{contestantID}
-// Value: JSON array of WaveProgress entries, one per completed wave so far.
+// WaveProgress is written to Redis after each wave so the leaderboard can show
+// live chip updates and a running score without waiting for telemetry to finish.
 type WaveProgress struct {
 	WaveNum     int     `json:"wave_num"`
 	Label       string  `json:"label"`
@@ -364,18 +361,35 @@ type WaveProgress struct {
 	P99         float64 `json:"p99_ms"`
 	SuccessRate float64 `json:"success_rate"`
 	Correctness float64 `json:"correctness"`
-	Done        bool    `json:"done"` // true = all waves complete
+	Score       float64 `json:"score"`  // per-wave score using same formula as telemetry
+	Done        bool    `json:"done"`   // true = all waves complete
 }
 
-func pushWaveProgress(rdb *redis.Client, contestantID string, wave WaveResult, totalWaves int, done bool) {
-	key := fmt.Sprintf("leaderboard:progress:%s", contestantID)
+// waveScore computes a per-wave score using the identical formula to telemetry:
+//   score = (1000/(p99+1)) * (1000/(p999+1)) * successRate * correctness
+// Bot-fleet doesn't have p999 so we use p99 for both terms — telemetry will
+// replace this with the precise value once it processes Redpanda results.
+func waveScore(p99, sr, cr float64) float64 {
+	p99Factor := 1000.0 / (p99 + 1.0)
+	// Use p99 as a proxy for p999 since we don't have it here
+	score := p99Factor * p99Factor * (sr / 100.0) * (cr / 100.0)
+	return score
+}
 
-	// Read the existing progress array (if any) and append the new wave
-	existing, err := rdb.Get(ctx, key).Result()
+// pushWaveProgress writes the completed wave's stats + running score to Redis.
+// This is called immediately after each wave finishes so the leaderboard shows
+// a live score that updates wave-by-wave, not just at the very end.
+func pushWaveProgress(rdb *redis.Client, contestantID string, wave WaveResult, totalWaves int, done bool) {
+	progressKey := fmt.Sprintf("leaderboard:progress:%s", contestantID)
+
+	// Read existing progress array and append new wave
+	existing, err := rdb.Get(ctx, progressKey).Result()
 	var progress []WaveProgress
 	if err == nil {
 		json.Unmarshal([]byte(existing), &progress)
 	}
+
+	thisWaveScore := waveScore(wave.P99, wave.SR, wave.CR)
 
 	progress = append(progress, WaveProgress{
 		WaveNum:     wave.WaveNum,
@@ -384,13 +398,84 @@ func pushWaveProgress(rdb *redis.Client, contestantID string, wave WaveResult, t
 		P99:         wave.P99,
 		SuccessRate: wave.SR,
 		Correctness: wave.CR,
+		Score:       thisWaveScore,
 		Done:        done,
 	})
 
 	data, _ := json.Marshal(progress)
-	// TTL of 2 hours — long enough to survive any test mode, auto-cleans after
-	rdb.Set(ctx, key, data, 2*time.Hour)
-	fmt.Printf("[Progress] Wave %d/%d pushed for %s\n", wave.WaveNum, totalWaves, contestantID)
+	rdb.Set(ctx, progressKey, data, 2*time.Hour)
+
+	// ── LIVE SCORE UPDATE ────────────────────────────────────────────────────
+	// Compute a running total from all waves completed so far and push it to
+	// leaderboard:scores immediately. The leaderboard WebSocket picks this up
+	// within 3 seconds and shows a real score during the test.
+	// Telemetry will overwrite with the precise final score once it finishes.
+
+	var runningScore float64
+	var overallP99 float64
+	var overallSR float64
+
+	// Build wave entries for the leaderboard scores blob
+	type LiveWaveEntry struct {
+		WaveNum     int     `json:"wave_num"`
+		Label       string  `json:"label"`
+		P50         float64 `json:"p50_ms"`
+		P99         float64 `json:"p99_ms"`
+		SuccessRate float64 `json:"success_rate"`
+		Correctness float64 `json:"correctness"`
+		Score       float64 `json:"score"`
+	}
+	var waveEntries []LiveWaveEntry
+
+	for _, w := range progress {
+		runningScore += w.Score
+		if w.P99 > overallP99 {
+			overallP99 = w.P99
+		}
+		overallSR += w.SuccessRate
+		waveEntries = append(waveEntries, LiveWaveEntry{
+			WaveNum:     w.WaveNum,
+			Label:       w.Label,
+			P50:         w.P50,
+			P99:         w.P99,
+			SuccessRate: w.SuccessRate,
+			Correctness: w.Correctness,
+			Score:       w.Score,
+		})
+	}
+	if len(progress) > 0 {
+		overallSR /= float64(len(progress))
+	}
+
+	// Fetch username if set
+	username, _ := rdb.HGet(ctx, "contestant:"+contestantID+":meta", "username").Result()
+
+	liveStatus := "running"
+	if done {
+		liveStatus = "" // telemetry will overwrite with full data shortly
+	}
+
+	liveBlob := map[string]interface{}{
+		"contestant_id":        contestantID,
+		"username":             username,
+		"overall_score":        runningScore,
+		"overall_p99":          overallP99,
+		"overall_p999":         overallP99, // proxy until telemetry computes real value
+		"overall_success_rate": overallSR,
+		"status":               liveStatus,
+		"waves":                waveEntries,
+	}
+	blobJSON, _ := json.Marshal(liveBlob)
+	rdb.HSet(ctx, "leaderboard:scores", contestantID, blobJSON)
+
+	// Also update the ZSet score so ranking reflects the running total
+	rdb.ZAdd(ctx, "leaderboard:ranking", redis.Z{
+		Score:  runningScore,
+		Member: contestantID,
+	})
+
+	fmt.Printf("[Progress] Wave %d/%d pushed for %s (running score: %.2f)\n",
+		wave.WaveNum, totalWaves, contestantID, runningScore)
 }
 
 func printFinalReport(waves []WaveResult, totalDuration time.Duration, mode string) {
@@ -415,8 +500,6 @@ func printFinalReport(waves []WaveResult, totalDuration time.Duration, mode stri
 	fmt.Printf("Total Duration: %v\n", totalDuration)
 	fmt.Printf("──────────────────────────────────────────────\n")
 }
-
-// runPriceTimePriorityTest fires a choreographed sequence to test matching fairness
 
 func getTargetURL(rdb *redis.Client, contestantID string, fallback string) string {
 	port, err := rdb.Get(ctx, fmt.Sprintf("sandbox:%s:port", contestantID)).Result()
@@ -501,15 +584,14 @@ func main() {
 			w5 := runChaosWave(5, resolvedURL, contestantID, numBots/2, waveDuration)
 
 			if multiInstrument {
-				// w5 is not the last wave — don't mark done yet
 				pushWaveProgress(rdb, contestantID, w5, totalWaves, false)
 				w6 := runWave(6, "BTC Multi-Instrument", "mixed", resolvedURL, contestantID, numBots/2, waveDuration, "BTC")
-				pushWaveProgress(rdb, contestantID, w6, totalWaves, true) // done=true on last wave
+				pushWaveProgress(rdb, contestantID, w6, totalWaves, true)
 				elapsed := time.Since(start)
 				printFinalReport([]WaveResult{w1, w2, w3, w4, w5, w6}, elapsed, mode)
 				pushToRedpanda(append(w1.Results, append(w2.Results, append(w3.Results, append(w4.Results, append(w5.Results, w6.Results...)...)...)...)...), topic)
 			} else {
-				pushWaveProgress(rdb, contestantID, w5, totalWaves, true) // done=true — all 5 waves complete
+				pushWaveProgress(rdb, contestantID, w5, totalWaves, true)
 				elapsed := time.Since(start)
 				printFinalReport([]WaveResult{w1, w2, w3, w4, w5}, elapsed, mode)
 				pushToRedpanda(append(w1.Results, append(w2.Results, append(w3.Results, append(w4.Results, w5.Results...)...)...)...), topic)

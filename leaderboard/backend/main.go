@@ -75,6 +75,7 @@ type ContestantEntry struct {
 	OverallSR    float64     `json:"overall_success_rate"`
 	Waves        []WaveScore `json:"waves"`
 	Rank         int         `json:"rank"`
+	Status       string      `json:"status,omitempty"` // "running" while test is in progress
 }
 
 type HistoryEntry struct {
@@ -234,8 +235,20 @@ func getLeaderboardData() ([]ContestantEntry, error) {
 
 		entry := ContestantEntry{
 			ContestantID: contestantID,
-			OverallScore: z.Score,
 			Rank:         i + 1,
+		}
+
+		// Read overall_score from the JSON blob — NOT z.Score.
+		// z.Score is set to -1 while a test is running (sentinel to sort below
+		// real scores). Reading from the blob gives 0.0 during a run and the
+		// real value once telemetry completes.
+		if v, ok := raw["overall_score"]; ok {
+			json.Unmarshal(v, &entry.OverallScore)
+		}
+
+		// Surface the status field so the frontend can show "running" state.
+		if v, ok := raw["status"]; ok {
+			json.Unmarshal(v, &entry.Status)
 		}
 
 		// Extract overall_p99, overall_p999, overall_success_rate
