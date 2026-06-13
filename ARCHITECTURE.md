@@ -6,360 +6,542 @@
 
 ## Overview
 
-This platform evaluates contestant-submitted trading infrastructure by containerizing their matching engines, stress-testing them with a 4-wave distributed bot fleet, and scoring them on latency, throughput, and correctness — streamed to a live leaderboard.
+This platform evaluates contestant-submitted trading engines by containerising them, stress-testing with a 5-wave distributed bot fleet, and streaming per-wave live scores to a real-time leaderboard — updated every wave, not just at the end.
 
 ---
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        CONTESTANT                               │
-│                   uploads binary/source                         │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        SANDBOX ENGINE                           │
-│         Docker container with CPU pinning + memory limits       │
-│               Exposes: POST /order  GET /orderbook              │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        BOT FLEET (Go)                           │
-│             4-wave stress test with ramping load                │
-│        Wave 1: Limit Orders  (10% → 50% → 100% of max bots)     │
-│        Wave 2: Market Orders (10% → 50% → 100% of max bots)     │
-│        Wave 3: Cancel Orders (10% → 50% → 100% of max bots)     │
-│        Wave 4: Mixed Sustained (all order types, full load)     │
-│        Per-bot: measures latency + correctness validation       │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                           REDPANDA                              │
-│                      Topic: bot-results                         │
-│            Decouples bot fleet from telemetry ingester          │
-│          Handles millions of events/sec, no JVM overhead        │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     TELEMETRY INGESTER (Go)                     │
-│                  Consumes from Redpanda topic                   │
-│      Computes per wave: p50 / p90 / p99 / TPS / correctness     │
-│               Latency histogram across all waves                │
-│                Breaking point detection per wave                │
-│        Score = (1000/(p99+1)) × success_rate × correctness      │
-└──────────────┬──────────────────────────────────────────────────┘
-               │
-               ▼
-┌──────────────────────────────────┐
-│              REDIS               │
-│ leaderboard:ranking (sorted set) │
-│   leaderboard:scores  (hash)     │
-└──────────────┬───────────────────┘
-               │
-               ▼
-┌──────────────────────────────────┐
-│       LEADERBOARD FRONTEND       │
-│  WebSocket stream of live scores │
-│    Per-wave breakdown + charts   │
-└──────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                            CONTESTANT                                │
+│              uploads Linux x86-64 binary via browser UI              │
+│              logs in with JWT (register / login)                     │
+└────────────────────────────┬─────────────────────────────────────────┘
+                             │  POST /upload  (Bearer JWT)
+                             ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                    LEADERBOARD BACKEND  :8081                        │
+│   /auth/register  /auth/login  — bcrypt + JWT                        │
+│   /upload         — proxies binary to Sandbox, stores username meta  │
+│   /ws             — WebSocket, pushes leaderboard JSON every 3s      │
+│   /leaderboard    — HTTP snapshot of current scores                  │
+│   /progress/{id}  — per-wave live chips for running contestants      │
+│   /history/{id}   — last 20 scored runs for a contestant             │
+└──────────┬───────────────────────────────────────────────────────────┘
+           │  HTTP proxy
+           ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                      SANDBOX ENGINE  :8080                           │
+│   Dynamic port pool  8082–8181  (100 parallel slots, Redis set)      │
+│   Docker run with  --cpus=1  --memory=256m  --pids-limit=128         │
+│   Polls GET /orderbook until container is healthy (≤30s timeout)     │
+│   Validates stdout for phantom fills via ORDER:/FILL: prefix         │
+│   Publishes  {status:"running", contestant_id, target_url}           │
+│              to Redis pub/sub channel  sandbox_logs                  │
+│   Writes placeholder  {status:"running", overall_score:0}            │
+│              to  leaderboard:scores  +  leaderboard:ranking(-1)      │
+└──────────┬───────────────────────────────────────────────────────────┘
+           │  Redis pub/sub  (sandbox_logs)
+           ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                        ORCHESTRATOR                                  │
+│   Subscribes to  sandbox_logs  channel                               │
+│   On each  status=running  event:                                    │
+│     1. Creates fresh per-contestant Redpanda topic                   │
+│        (deletes previous run's topic first — idempotent)             │
+│     2. Spawns  ./botfleet_bin  (pre-built binary, no compile delay)  │
+│     3. After bot fleet exits, spawns  ./telemetry_bin                │
+│   Container Reaper: background goroutine, scans every 60s,           │
+│     force-stops any container alive > 35 minutes                     │
+└──────────┬───────────────────────────────────────────────────────────┘
+           │
+     ┌─────┴──────────┐
+     │                │
+     ▼                ▼
+┌─────────┐    ┌──────────────────────────────────────────────────────┐
+│  REDIS  │    │                  BOT FLEET  (./botfleet_bin)         │
+│         │◄───│  5-wave stress test, 100 bots, Go goroutines         │
+│ leaderb │    │                                                      │
+│ :scores │    │  Wave 1  Limit Orders    — order book insertion      │
+│ leaderb │    │  Wave 2  Market Orders   — matching engine core      │
+│ :ranking│    │  Wave 3  Cancel Orders   — O(1) cancel index         │
+│ leaderb │    │  Wave 4  Mixed Sustained — all types, full load      │
+│ :progre │    │  Wave 5  Chaos Testing   — zero price/qty, extremes  │
+│ :history│    │                                                      │
+│         │    │  Each wave ramps: 10% → 50% → 100% of max bots       │
+│         │    │                                                      │
+│         │    │  After EACH wave completes:                          │
+│         │    │  ┌──────────────────────────────────────────────┐    │
+│         │    │  │  pushWaveProgress()                          │    │
+│         │    │  │  • Appends wave stats to leaderboard:progress│    │
+│         │    │  │  • Computes running score from waves so far  │    │
+│         │    │  │  • Writes live blob to leaderboard:scores    │    │
+│         │    │  │  • Updates leaderboard:ranking ZSet          │    │
+│         │    │  │  → Leaderboard shows real score mid-test     │    │
+│         │    │  └──────────────────────────────────────────────┘    │
+│         │    │                                                      │
+└────┬────┘    │  All raw results pushed to per-contestant            │
+     │         │  Redpanda topic  bot-results-{id}                    │
+     │         └──────────────────────────────────────────────────────┘
+     │                        │
+     │                        ▼
+     │         ┌──────────────────────────────────────────────────────┐
+     │         │               REDPANDA  :19092                       │
+     │         │  Per-contestant topic:  bot-results-{contestant_id}  │
+     │         │  Topic deleted + recreated on each new run           │
+     │         │  Decouples bot fleet from telemetry (fire-and-forget)│
+     │         └──────────────────────────────────────────────────────┘
+     │                        │
+     │                        ▼
+     │         ┌──────────────────────────────────────────────────────┐
+     │         │           TELEMETRY INGESTER  (./telemetry_bin)      │
+     │         │  Consumes all results from per-contestant topic      │
+     │         │  HDR Histogram (hdrhistogram-go) — O(1) recording    │
+     │         │  Computes per-wave: p50/p90/p99/p999/TPS/SR/correct  │
+     │         │  Breaking point detection across 3 ramp steps        │
+     │         │  Scoring formula applied precisely with p999         │
+     │         │  Writes final score to leaderboard:scores + :ranking │
+     │         │  Appends to leaderboard:history:{id}  (last 20 runs) │
+     │         └──────────────────────────────────────────────────────┘
+     │
+     ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                      LEADERBOARD FRONTEND  :3000                     │
+│  WebSocket pulls fresh leaderboard JSON every 3 seconds              │
+│  Running card: shows live score updating after each wave             │
+│  Finished card: shows final score, per-wave bar chart, breakdown     │
+│  Stats bar: best score / best p99 / avg — excludes running entries   │
+│  Score History chart: per-contestant score over time                 │
+│  My Runs tab: last 20 runs for logged-in contestant                  │
+│  How-to-Submit guide: C++ / Rust / Go compile commands               │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Submission Flow (step by step)
+
+```
+Contestant                Browser              Leaderboard Backend       Sandbox
+    │                        │                        │                     │
+    │──── register/login ────►│                       │                     │
+    │◄─── JWT token ─────────│                        │                     │
+    │                        │                        │                     │
+    │──── upload binary ─────►│                       │                     │
+    │                        │──── POST /upload ──────►│                     │
+    │                        │     (Bearer JWT)        │──── proxy ─────────►│
+    │                        │                        │     POST /upload     │
+    │                        │                        │                     │── acquirePort()
+    │                        │                        │                     │── docker run
+    │                        │                        │                     │── waitForContainer()
+    │                        │                        │                     │── validateLogs()
+    │                        │                        │                     │── publish sandbox_logs
+    │                        │                        │                     │── write placeholder
+    │                        │                        │                     │   leaderboard:scores
+    │                        │◄──── {status:running} ─│◄────────────────────│
+    │◄── card appears with ──│                        │
+    │    "Test in progress"  │
+    │                        │
+    │    (Orchestrator picks up sandbox_logs event)
+    │    (Creates Redpanda topic, launches botfleet_bin)
+    │
+    │   After each wave:     │
+    │◄── score updates live ─│◄── WebSocket ──────────│◄── Redis leaderboard:scores updated
+    │    W1: 4270            │                        │    by pushWaveProgress()
+    │    W2: 12817           │                        │
+    │    W3: 15274           │                        │
+    │    ...                 │                        │
+    │                        │                        │
+    │   (Orchestrator launches telemetry_bin after bot fleet exits)
+    │   (Telemetry reads Redpanda, computes precise final score)
+    │◄── final score ────────│◄── WebSocket ──────────│◄── Redis leaderboard:scores overwritten
+    │    with p999, HDR hist │                        │    by telemetry, history appended
 ```
 
 ---
 
 ## Components
 
-### 1. Submission & Sandboxing Engine
+### 1. Leaderboard Backend (`:8081`)
 
-Contestants upload their matching engine source code or binary. The platform:
+New in this version — the backend now owns authentication and proxies uploads.
 
-- Compiles the submission inside a pre-built Docker base image
-- Runs the binary in a strictly isolated container with `--cpus=1` and `--memory=512m`
-- Uses a **warm container pool** — containers are pre-initialized and waiting, so startup latency is ~50ms instead of ~3 seconds from cold start
-- Exposes the contestant's engine on an internal port via a predefined REST API contract
+**Auth — JWT + bcrypt**
+- `POST /auth/register` — hashes password with bcrypt, stores in `auth:user:{username}` Redis hash, returns signed JWT
+- `POST /auth/login` — verifies bcrypt hash, returns JWT
+- JWT secret configurable via `JWT_SECRET` env var
+- All `/upload` requests require `Authorization: Bearer <token>`
 
-**API Contract every contestant must implement:**
+**Upload proxy**
+- Strips JWT, injects `contestant_id` (defaults to username), stores `username → contestant_id` mapping in Redis
+- Proxies multipart binary to Sandbox at `SANDBOX_URL` (default `localhost:8080`)
+
+**WebSocket leaderboard (`/ws`)**
+- Pushes full leaderboard JSON every 3 seconds to all connected clients
+- Reads `leaderboard:ranking` ZSet for ordering
+- Reads `overall_score` and `status` from the JSON blob in `leaderboard:scores` — **not** from the ZSet score (which is a `-1` sentinel while running)
+- Surfaces `status: "running"` to frontend so it renders the live card correctly
+
+**Progress endpoint (`/progress/{id}`)**
+- Reads `leaderboard:progress:{id}` from Redis
+- Returns array of completed waves with p50/p99/SR/correctness/score per wave
+- Called by frontend every WebSocket tick for all running contestants
+
+**History endpoint (`/history/{id}`)**
+- Reads `leaderboard:history:{id}` list (capped at 20 entries)
+- Returns last 20 scored runs with timestamps and per-wave breakdown
+
+---
+
+### 2. Sandbox Engine (`:8080`)
+
+**Dynamic port pool**
+- Ports `8082–8181` (100 slots) stored as a Redis set (`sandbox:port_pool`)
+- `acquirePort()` — atomic `SPOP` from the set; fails fast if all slots in use
+- `releasePort()` — `SADD` back on container stop, failure, or reaper cleanup
+- Port pool seeded once on startup, idempotent on restart
+
+**Container lifecycle**
 ```
-POST   /order      — place order (type: "limit", "market", or "cancel")
-GET    /orderbook  — current best bid/ask
+acquirePort()
+  └── docker stop/rm contestant_{id}  (remove stale container if any)
+  └── releasePort(old port)           (return previous port to pool)
+  └── docker run -d
+        --name contestant_{id}
+        --memory=256m
+        --cpus=1.0
+        --security-opt=no-new-privileges
+        --pids-limit=128
+        -p {port}:8080
+        -v {binary}:/app/contestant_bot:ro
+        ubuntu:22.04 /app/contestant_bot
+  └── waitForContainer()              (polls GET /orderbook, 500ms interval, 30s timeout)
+  └── validateLogs()                  (phantom fill detection)
+  └── publish sandbox_logs
+  └── write placeholder to leaderboard:scores
 ```
 
-**Order payload:**
+**Placeholder written immediately on container start:**
 ```json
 {
-  "bot_id": 1,
-  "type": "limit",
-  "side": "buy",
-  "price": 1820.50,
-  "quantity": 3
+  "contestant_id": "stevie_x",
+  "username": "stevie_x",
+  "overall_score": 0.0,
+  "overall_p99": 0.0,
+  "status": "running",
+  "waves": []
 }
 ```
+ZSet score set to `-1` so running contestants sort below all finished ones.
+
+**Log validation (`validator.go`)**
+Scans container stdout for `ORDER:` and `FILL:` prefixed lines. If `fills > orders`, the submission is flagged for phantom fills (accepting orders without processing them).
+
+**Container security**
+- `--no-new-privileges` — prevents privilege escalation
+- `--pids-limit=128` — prevents fork bombs
+- `--memory=256m` — hard memory cap
+- `--cpus=1.0` — single core, fair comparison across contestants
 
 ---
 
-### 2. Distributed Bot Fleet — 4-Wave Stress Test
+### 3. Orchestrator
 
-Built in **Go** using goroutines. A single Go service runs a structured 4-wave stress test, each wave isolating a specific order type with ramping concurrency.
+Bridges Sandbox events to bot fleet and telemetry. No HTTP server — pure event-driven.
 
-**Why Go over C++ or Python:**
-- Go goroutines are not OS threads — the Go scheduler multiplexes them onto a small thread pool, allowing 100,000+ concurrent goroutines on a single machine without kernel-level context switching overhead
-- Python threads are limited by the GIL
-- C++ concurrent HTTP clients require significant boilerplate (Boost.Beast + asio)
-
-**The 4-Wave Design:**
-
-| Wave | Order Type | Purpose |
-|------|-----------|---------|
-| 1 | Limit Orders | Stress order book insertion — tests price level data structure |
-| 2 | Market Orders | Stress matching engine core — tests execution loop speed |
-| 3 | Cancel Orders | Stress order lookup — tests whether O(1) cancel index exists |
-| 4 | Mixed Sustained | Real market simulation — all types under full load |
-
-**Ramping load within each wave:**
+**Event loop**
 ```
-Step 1: 10% of max bots  → baseline latency
-Step 2: 50% of max bots  → mid-load behavior
-Step 3: 100% of max bots → peak load, breaking point detection
+Subscribe to Redis channel: sandbox_logs
+  │
+  └── On message where status = "running":
+        1. Read test_mode:{id} from Redis (blitz/standard/marathon, default=blitz)
+        2. Sleep 2s  (container stabilisation grace period)
+        3. ensureTopic(id)
+              delete bot-results-{id}   (clears previous run's data)
+              create bot-results-{id}   (fresh topic for this run)
+        4. go runBotFleet(id, mode)
+              exec ./botfleet_bin --mode {mode} --bots 100 --contestant {id} --topic bot-results-{id}
+              (stdout/stderr piped to orchestrator terminal)
+        5. After bot fleet exits → runTelemetry(id, expected, topic)
+              exec ./telemetry_bin --contestant {id} --topic bot-results-{id} --timeout 300
 ```
 
-This design finds the exact bot count where each order type starts degrading — not just a single snapshot.
+**Pre-built binaries** — orchestrator calls `./botfleet_bin` and `./telemetry_bin`, not `go run`. This eliminates Go compilation delay (~3s) from the critical path on every submission.
 
-**CLI flags:**
+Build once:
 ```bash
-go run main.go --bots 1000 --duration 60s --target http://localhost:8080 --contestant contestant_001
+cd bot-fleet  && go build -o ../orchestrator/botfleet_bin  .
+cd telemetry  && go build -o ../orchestrator/telemetry_bin .
 ```
 
-**Per-bot flow:**
-1. Generate order of the wave's type (random side, price, quantity)
-2. Record `send_timestamp` (nanosecond precision via `time.Now()`)
-3. HTTP POST to contestant's `/order` endpoint
-4. Record `receive_timestamp`
-5. For limit orders: GET `/orderbook` and validate best bid/ask is consistent
-6. Push `Result{bot_id, order_type, latency_ns, success, correct, wave}` to Redpanda
-
-**Correctness validation:**
-After each limit order, the bot queries `/orderbook` and verifies the best bid/ask is within a valid range of the submitted price. This catches engines that accept orders but don't actually process them.
-
-**Measured results on dummy target (100 bots, 40s):**
-
-| Wave | P50 | P99 | Success | Correctness |
-|------|-----|-----|---------|-------------|
-| Limit Orders | 12.6ms | 29.5ms | 100% | 100% |
-| Market Orders | 9.7ms | 22.8ms | 100% | 100% |
-| Cancel Orders | 9.3ms | 15.8ms | 100% | 100% |
-| Mixed | 9.0ms | 18.0ms | 100% | 99.4% |
+**Container Reaper**
+Background goroutine, ticks every 60 seconds. Scans all `sandbox:*:port` Redis keys. Any container whose key TTL has dropped below `(30min - 35min threshold)` is force-stopped and its port returned to the pool. Prevents resource leaks from abandoned submissions.
 
 ---
 
-### 3. Redpanda Message Queue
+### 4. Bot Fleet — 5-Wave Stress Test
+
+**The 5 waves**
+
+| Wave | Order Type | What it stresses |
+|------|-----------|-----------------|
+| 1 | Limit Orders | Price level data structure — insertion at O(log N) or better |
+| 2 | Market Orders | Matching engine core — execution loop throughput |
+| 3 | Cancel Orders | Order lookup index — must be O(1) hash map, not O(N) scan |
+| 4 | Mixed Sustained | Real market simulation — all order types under full concurrent load |
+| 5 | Chaos Testing | Resilience — zero price, zero qty, extreme price, huge qty, invalid combos |
+
+**Ramp pattern within each wave**
+```
+Step 1:  10% of max bots  →  baseline latency (light load)
+Step 2:  50% of max bots  →  mid-load degradation check
+Step 3: 100% of max bots  →  peak load, breaking point detection
+```
+
+**Live score push after every wave (`pushWaveProgress`)**
+
+This is the key addition for live leaderboard scores. After each wave:
+
+1. Reads existing `leaderboard:progress:{id}` array from Redis
+2. Appends the completed wave's stats
+3. Computes a per-wave score using the same formula as telemetry:
+   ```
+   wave_score = (1000 / (p99 + 1))² × (success_rate / 100) × (correctness / 100)
+   ```
+   (p999 is proxied as p99 here; telemetry will replace with the precise HDR value)
+4. Sums all completed wave scores into `running_total`
+5. Writes full live blob to `leaderboard:scores` and updates `leaderboard:ranking` ZSet
+6. Frontend picks this up within 3 seconds via WebSocket → score updates live
+
+**Per-bot flow**
+```
+generate order (type = wave's order type, random side/price/qty)
+record send_timestamp (nanosecond via time.Now())
+HTTP POST /order
+record receive_timestamp
+latency = receive_timestamp - send_timestamp
+if limit order: GET /orderbook → validate best bid/ask within range
+push Result{bot_id, order_type, latency_ns, success, correct, wave} to Redpanda
+```
+
+**Additional checks run before the 5 waves:**
+- `GET /orderbook/depth` — checks if the engine supports depth endpoint (optional, skipped if absent)
+- Price-time priority test — places two orders at same price, verifies earlier arrival fills first (requires engine to return `filled_order_id` in response)
+
+---
+
+### 5. Redpanda (`:19092` external / `:9092` internal)
+
+Per-contestant isolated topics — `bot-results-{contestant_id}`.
+
+The orchestrator deletes and recreates the topic before each run so stale data from a previous submission never contaminates scoring. Bot fleet producers write to it; telemetry consumes from it. The two never communicate directly.
 
 **Why Redpanda over Kafka:**
-- No ZooKeeper dependency — Kafka requires a separate ZooKeeper cluster just to manage itself
-- No JVM — Redpanda is written in C++, significantly lower memory footprint and tail latency
-- Drop-in Kafka API compatibility — any Kafka client works without code changes
-- Single binary deployment
-
-**Topic:** `bot-results`
-**Message format:**
-```json
-{
-  "bot_id": 127,
-  "order_type": "limit",
-  "latency_ns": 24673625,
-  "success": true,
-  "correct": true,
-  "wave": 1
-}
-```
-
-Redpanda decouples the bot fleet from the telemetry ingester. The bots never wait for scoring to complete — they fire and forget into the topic. This keeps the load generator on the hot path and analytics completely async.
+- No ZooKeeper — single binary, simpler ops
+- No JVM — written in C++, lower memory and tail latency
+- Drop-in Kafka API — franz-go client works without changes
 
 ---
 
-### 4. Telemetry Ingester
+### 6. Telemetry Ingester
 
-Consumes all messages from the `bot-results` Redpanda topic and produces a full scoring report.
+Consumes all `bot-results-{id}` messages and produces the final authoritative score.
 
-**Per-wave scoring:**
+**HDR Histogram**
+Uses `hdrhistogram-go` — O(1) per-recording, ~40KB memory regardless of result count. Produces accurate p50/p90/p99/p999 from millions of samples.
 
-Each wave is scored independently, giving contestants specific feedback on which order type their engine handles poorly:
-
+**Scoring formula (per wave)**
 ```
-Wave 1 Limit Orders    ✓  p50=12ms  p99=29ms  success=100%  correct=100%  score=32.8
-Wave 2 Market Orders   ✓  p50=9ms   p99=22ms  success=100%  correct=100%  score=42.0
-Wave 3 Cancel Orders   ✓  p50=9ms   p99=15ms  success=100%  correct=100%  score=59.5
-Wave 4 Mixed           ✓  p50=9ms   p99=18ms  success=100%  correct=99%   score=52.4
-```
-
-**Scoring formula per wave:**
-```
-wave_score = (1000 / (p99_ms + 1)) × (success_rate / 100) × (correctness / 100)
-final_score = average of all wave scores
+wave_score = (1000 / (p99_ms + 1)) × (1000 / (p999_ms + 1)) × success_rate × correctness
+final_score = sum of all wave scores
 ```
 
 This rewards:
-- Low p99 latency — 1ms p99 scores ~1000, 100ms p99 scores ~10
-- High success rate — engines that drop orders under load are penalized
-- High correctness — engines that accept but don't process orders are penalized
+- Low p99 — 1ms scores ~1000, 100ms scores ~10
+- Low p999 — tail latency matters; a single outlier hurts
+- High success rate — dropping orders under load is penalised
+- High correctness — accepting but not processing is penalised
 
-**Breaking point detection:**
-
-For each wave, the telemetry ingester scans the three ramp steps and classifies the engine:
+**Breaking point detection**
+For each wave, telemetry scans the three ramp steps (10% / 50% / 100%) and classifies:
 ```
 ✓ Stable across all load levels (p99 < 50ms throughout)
 ⚠ Stable up to N bots, degradation starts at M bots
 ✗ Stable up to N bots, breaking point at M bots (p99 spike / errors)
 ```
 
-**Latency histogram:**
+**Redis writes after scoring**
 ```
-0-10ms       │█████████████████████ 278 (43.4%)
-10-50ms      │████████████████████████████ 362 (56.6%)
-50-100ms     │ 0 (0.0%)
-100-250ms    │ 0 (0.0%)
+HSet leaderboard:scores   {contestant_id}  {full JSON with per-wave breakdown}
+ZAdd leaderboard:ranking  score={final_score}  member={contestant_id}
+LPush leaderboard:history:{id}  {timestamp, overall_score, waves}
+LTrim leaderboard:history:{id}  0 19   (keep last 20 runs)
 ```
-
-**Why percentiles over averages:**
-If 990 orders take 1ms and 10 orders take 5000ms, the average is ~51ms — completely misleading. P99 correctly surfaces the 5000ms worst case.
-
-**Output — two Redis writes per test:**
-- `leaderboard:ranking` — Redis sorted set, auto-ordered by score
-- `leaderboard:scores` — Redis hash, full JSON breakdown per contestant including per-wave scores
 
 ---
 
-### 5. Real-Time Leaderboard
+### 7. Leaderboard Frontend (`:3000`)
 
-Reads from Redis sorted set and streams updates to a WebSocket-connected frontend. The leaderboard never touches Redpanda or TimescaleDB directly — it only reads pre-computed scores from Redis, which handles 100,000+ reads/second at microsecond latency.
+Served via `python3 -m http.server 3000` from `leaderboard/frontend/`.
 
-**Displayed metrics per contestant:**
-- Per-wave p50 / p90 / p99 latency
-- Per-wave success rate and correctness
-- Breaking point per wave
-- TPS (transactions per second)
-- Composite final score and live rank
+**Live score during a test**
+- Running contestant card shows actual running score (sum of completed waves so far) — not `—`
+- Score label reads "Test in progress... (live score)"
+- Wave chips update after each wave: grey `pending` → green `done` with p99 and SR values
+- Refreshes on every WebSocket tick (every 3 seconds)
+
+**Finished contestant card**
+- Final score, success rate, orders tested
+- "Stable / degrades / breaks under load" badge
+- Per-wave bar chart (P50 vs P99) via Chart.js
+- Full wave breakdown table (expandable)
+- P99 distribution histogram
+
+**Stats bar**
+- Only counts finished contestants — running contestants (score = 0) are excluded from best score and average to avoid distorting the display
+
+**My Runs tab**
+- Shows last 20 scored runs for the logged-in contestant's ID
+- Loaded from `GET /history/{id}`
+
+**Score History chart**
+- Tracks per-contestant score over the session
+- Only plots finished contestants
+
+**How-to-Submit guide (collapsible)**
+- API contract contestants must implement
+- Compile commands for C++, Rust, and Go
+- Common mistakes (forgetting `-static`, wrong port, no concurrency, crashing on chaos orders)
+
+**Auth flow**
+- Register / Login tabs → stores JWT in `localStorage`
+- Upload button requires valid JWT; backend validates on every upload
+- Contestant ID defaults to username if left blank
 
 ---
 
 ## Data Stores
 
-| Store | Purpose | Why |
+| Store | Keys / Structure | Purpose |
 |---|---|---|
-| Redpanda | Raw metrics pipeline | High throughput, decoupled, async |
-| Redis | Leaderboard scores | Sub-millisecond reads, sorted sets built-in |
-| TimescaleDB | Historical metrics archive | Time-series queries, Postgres-compatible |
+| Redis | `leaderboard:ranking` (ZSet) | Ordered by score; `-1` sentinel for running |
+| Redis | `leaderboard:scores` (Hash) | Full JSON blob per contestant |
+| Redis | `leaderboard:progress:{id}` (String) | Per-wave live progress array |
+| Redis | `leaderboard:history:{id}` (List) | Last 20 scored runs, capped by LTrim |
+| Redis | `sandbox:port_pool` (Set) | Available ports 8082–8181 |
+| Redis | `sandbox:{id}:port` (String, TTL 30m) | Active port for a running container |
+| Redis | `sandbox:{id}:status` (String, TTL 30m) | "running" while container is live |
+| Redis | `test_mode:{id}` (String, TTL 24h) | blitz / standard / marathon |
+| Redis | `contestant:{id}:meta` (Hash) | username mapping |
+| Redis | `auth:user:{username}` (Hash) | bcrypt hash + created_at |
+| Redpanda | `bot-results-{id}` (topic) | Raw per-bot results; recreated each run |
+| TimescaleDB | (available, not yet wired) | Historical metrics archive |
 
 ---
 
-## Infrastructure as Code
+## Infrastructure
 
-All services defined in `infra/docker-compose.yml` for local development.
-Production deployment via Kubernetes manifests in `infra/k8s/`.
-
-**Services:**
-- `redpanda` — message queue on port 9092
-- `redis` — leaderboard store on port 6379
-- `timescaledb` — metrics archive on port 5432
-
-Spin up entire platform locally:
+Spun up with a single command:
 ```bash
-docker compose -f infra/docker-compose.yml up -d
+cd infra && docker compose up -d
+```
+
+| Service | Image | Ports | Health check |
+|---|---|---|---|
+| redpanda | redpandadata/redpanda:latest | 9092 (internal), 19092 (external), 9644 | `rpk cluster info` |
+| redis | redis:alpine | 6379 | `redis-cli ping` |
+| timescaledb | timescale/timescaledb:latest-pg15 | 5432 | `pg_isready` |
+
+---
+
+## Running the Platform
+
+Start services in this order:
+
+```
+Tab 1 — infra
+cd infra && docker compose up -d
+
+Tab 2 — sandbox (manages contestant containers)
+cd sandbox && go run main.go validator.go
+
+Tab 3 — leaderboard backend (API + WebSocket)
+cd leaderboard/backend && go run main.go
+
+Tab 4 — orchestrator (runs bot fleet + telemetry after each upload)
+cd orchestrator && go run main.go
+
+Tab 5 — frontend
+cd leaderboard/frontend && python3 -m http.server 3000
+→ open http://localhost:3000
+```
+
+**One-time binary build** (required before first run or after any bot-fleet / telemetry code change):
+```bash
+cd bot-fleet && go build -o ../orchestrator/botfleet_bin .
+cd telemetry  && go build -o ../orchestrator/telemetry_bin .
 ```
 
 ---
 
-## Key Architectural Decisions
+## Scoring Formula Reference
 
-| Decision | Alternative | Reason |
-|---|---|---|
-| Go for bot fleet | C++ / Python | Goroutines handle 1000+ concurrent bots trivially |
-| Redpanda over Kafka | Kafka | No ZooKeeper, no JVM, lower tail latency |
-| 4-wave isolated test | Single mixed test | Isolates which order type causes degradation |
-| Ramping load | Fixed concurrency | Finds breaking point, not just peak snapshot |
-| Redis sorted set for leaderboard | DB query | O(log N) insert, O(1) range read, never blocks |
-| Warm container pool | Cold start | 50ms vs 3000ms container startup |
-| Percentile metrics | Averages | Averages hide worst-case behavior under load |
-| Per-wave correctness | End-to-end only | Pinpoints which operation type has bugs |
+```
+Per-wave score:
+  wave_score = (1000 / (p99_ms + 1)) × (1000 / (p999_ms + 1)) × success_rate × correctness
+
+  where success_rate and correctness are fractions (0.0–1.0)
+
+Final score:
+  final_score = Σ wave_scores  (sum of all 5 waves)
+
+Live score during test (bot-fleet approximation):
+  live_wave_score = (1000 / (p99_ms + 1))² × success_rate × correctness
+  live_score = Σ live_wave_scores  (updated after each wave)
+  Note: p999 not available mid-test; telemetry overwrites with precise value at end
+```
+
+| p99 | score factor |
+|-----|-------------|
+| 1ms | ~500 |
+| 5ms | ~28,000 |
+| 10ms | ~8,300 |
+| 50ms | ~384 |
+| 100ms | ~99 |
+| 500ms | ~4 |
 
 ---
 
 ## Known Limitations and Future Work
 
-### Measurement Accuracy — Coordinated Omission
+### Coordinated Omission
+Latency is measured at the HTTP client level (application latency), not wire-to-wire. TCP setup and HTTP overhead are included. True exchange latency measurement requires kernel bypass (DPDK, io_uring) from NIC to NIC.
 
-The current latency measurement timestamps at the HTTP client level
-(application-level latency), not at the network interface level
-(wire-to-wire latency). This means TCP connection setup and HTTP
-overhead are included in every measurement. Real exchange latency
-measurement uses kernel bypass networking (DPDK, io_uring) to
-measure from the moment a packet hits the NIC.
+### Correctness Validation Round Trip
+The GET /orderbook correctness check after each limit order adds an extra HTTP round trip inside the latency measurement window. A cleaner design would run a separate validation pass after the load test, keeping latency measurement tight.
 
-The correctness validation step (GET /orderbook after each limit order)
-adds an extra HTTP round trip. In production this would be separated
-into a dedicated validation pass after the load test completes, keeping
-latency measurement clean.
+### Statistical Sample Size
+P99 is statistically meaningful at ≥1000 samples per wave. Blitz mode (100 bots) produces ~160 samples per wave — telemetry warns when below threshold. Run with `--bots 1000` (standard/marathon modes) for reliable percentiles.
 
-### HDR Histogram — Implemented
+### Parallel Testing
+The platform currently tests one contestant sequentially per orchestrator. True parallel testing requires Kubernetes pod-per-contestant isolation and Redpanda consumer groups. Manifests are in `infra/k8s/`.
 
-~~The current percentile computation stores all latency values in memory
-and sorts them — O(n log n).~~
-
-**Resolved:** The telemetry ingester now uses HDR Histogram
-(High Dynamic Range) for O(1) per-recording latency capture with
-~40KB memory regardless of result count. Min/Max/Mean/P50/P90/P99/P99.9
-are all computed from the HDR histogram directly.
-
-### Statistical Sample Size — Implemented
-
-~~P99 requires a minimum of 1000 samples to be statistically meaningful.~~
-
-**Resolved:** The telemetry ingester enforces a minimum sample size
-warning at 1000 results per wave. Running with `--bots 1000` produces
-~1600 results per wave, satisfying the statistical threshold. The
-platform warns users if sample size is insufficient.
-
-### Dynamic Port Allocation — Partially Implemented
-
-The sandbox currently assigns port 8082 to all contestants. For true
-parallel testing, a port pool (8082-9082) must be allocated dynamically
-per contestant. This is the next sandboxing improvement required before
-1000-contestant parallel testing is possible.
-
-### Horizontal Scaling
-
-The current architecture tests one contestant at a time sequentially.
-True 1000-contestant parallel testing requires Kubernetes horizontal
-pod autoscaling — each contestant runs in an isolated pod, the bot
-fleet spawns per-pod goroutine pools, and the telemetry ingester uses
-Redpanda consumer groups to process per-contestant result streams
-independently. Kubernetes manifests are in `infra/k8s/`.
-
-### Price-Time Priority Correctness
-
-The current correctness check validates that the orderbook best bid/ask
-is within a valid range after each order. A stricter correctness check
-would verify price-time priority — that orders at the same price level
-are filled in arrival order. This requires persistent bot identities
-and fill notification parsing, similar to FIX protocol ExecutionReport
-messages.
+### TimescaleDB
+Wired into the infra compose file but not yet connected to telemetry. Intended for historical metrics archive and time-series latency queries across many runs.
 
 ### Cross-Architecture Compilation
+Contestant binaries must be Linux x86-64. The sandbox runs Ubuntu 22.04 containers. Mac ARM binaries (Apple Silicon) will not run. A future improvement would auto-detect and cross-compile server-side.
 
-Contestant binaries must be compiled for Linux AMD64 to run inside
-Ubuntu Docker containers. Mac ARM binaries are incompatible. The
-platform currently requires contestants to submit Linux binaries.
-A future improvement would auto-detect and cross-compile submissions
-server-side.
+### Price-Time Priority Verification
+Current correctness check validates orderbook consistency after each order. Strict price-time priority verification requires engines to return `filled_order_id` in the `/order` response — currently optional and logged as a warning if absent.
+
 ---
 
 ## Team
 
 | Member | Component |
 |---|---|
-| Upanshu Smit (stevie-x) | Bot Fleet + Telemetry Ingester |
-| Abhisoumya Kapoor (The-Asterix) | Submission & Sandboxing Engine |
-| Shubhayu Brahmachari (Snoob965) | Leaderboard Frontend + IaC |
+| Upanshu Smit (stevie-x) | Bot Fleet · Telemetry Ingester · Live Score Pipeline |
+| Abhisoumya Kapoor (The-Asterix) | Submission & Sandboxing Engine · Port Pool · Container Reaper |
+| Shubhayu Brahmachari (Snoob965) | Leaderboard Frontend · Backend API · Auth · IaC |
