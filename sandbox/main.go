@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -28,12 +31,30 @@ const portPoolKey = "sandbox:port_pool"
 const portMin = 8082
 const portMax = 8181
 
-func initPortPool() {
-	// Only seed the pool if it's empty
-	size, _ := rdb.SCard(ctx, portPoolKey).Result()
-	if size > 0 {
+// cleanupAllContainers stops and removes every contestant_{id} Docker container.
+// Called on startup (clears previous run's debris) and on graceful shutdown.
+func cleanupAllContainers() {
+	out, err := exec.Command("docker", "ps", "-a", "--format", "{{.Names}}").Output()
+	if err != nil {
 		return
 	}
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.HasPrefix(name, "contestant_") {
+			exec.Command("docker", "stop", name).Run()
+			exec.Command("docker", "rm", name).Run()
+			fmt.Printf("[Sandbox] Cleaned up stale container: %s\n", name)
+		}
+	}
+}
+
+func initPortPool() {
+	// Always wipe and reseed on startup — guarantees a clean slate after a
+	// crash or Ctrl+C. Stale "in-use" ports from the previous run are
+	// returned to the pool automatically. We also stop+rm any leftover
+	// contestant containers so the ports are actually free at the OS level.
+	cleanupAllContainers()
+
+	rdb.Del(ctx, portPoolKey)
 	pipe := rdb.Pipeline()
 	for p := portMin; p <= portMax; p++ {
 		pipe.SAdd(ctx, portPoolKey, fmt.Sprintf("%d", p))
@@ -263,15 +284,32 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// Seed the port pool on startup (idempotent — safe to call on restart)
+	// Always reseed port pool and clean up stale containers on startup.
+	// Safe to call after a crash, Ctrl+C, or normal restart — never leaves
+	// "no free ports" behind.
 	initPortPool()
 
 	http.HandleFunc("/upload", uploadHandler)
 	http.HandleFunc("/stop", stopHandler)
 
-	port := ":8080"
-	fmt.Printf("Sandbox Engine starting on port %s...\n", port)
-	if err := http.ListenAndServe(port, nil); err != nil {
+	srv := &http.Server{Addr: ":8080"}
+
+	// Graceful shutdown — catch Ctrl+C and SIGTERM.
+	// Stops all contestant containers before exiting so ports are released
+	// at the OS level and the next startup finds a perfectly clean slate.
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+		<-quit
+		fmt.Println("\n[Sandbox] Shutting down — cleaning up containers...")
+		cleanupAllContainers()
+		rdb.Del(ctx, portPoolKey)
+		fmt.Println("[Sandbox] Cleanup complete. Goodbye.")
+		os.Exit(0)
+	}()
+
+	fmt.Printf("Sandbox Engine starting on port %s...\n", ":8080")
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
